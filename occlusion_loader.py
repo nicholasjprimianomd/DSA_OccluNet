@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,10 +21,13 @@ except ImportError:  # pragma: no cover - handled at runtime when dataset classe
         pass
 
 
-DEFAULT_COLAB_EXCEL_PATH = Path("/content/drive/MyDrive/M2_M3_data/AP_Lateral_Labels_Split.xlsx")
+EXCEL_PATH_ENV_VAR = "DSA_EXCEL_PATH"
+BASE_DIR_ENV_VAR = "DSA_BASE_DIR"
+EXCEL_FILENAME = "AP_Lateral_Labels_Split.xlsx"
+
 DEFAULT_COLAB_BASE_DIR = Path("/content/drive/MyDrive/M2_M3_data")
-DEFAULT_LOCAL_EXCEL_PATH = Path(r"H:\My Drive\M2_M3_data\AP_Lateral_Labels_Split.xlsx")
-DEFAULT_LOCAL_BASE_DIR = Path(r"H:\My Drive\M2_M3_data")
+DEFAULT_WINDOWS_BASE_DIR = Path(r"H:\My Drive\M2_M3_data")
+DEFAULT_LINUX_BASE_DIR = Path.home() / "M2_M3_data"
 
 VIEW_COLUMNS: dict[str, list[str]] = {
     "AP": ["AP_1", "AP_2", "AP_3"],
@@ -81,12 +85,22 @@ def running_in_colab() -> bool:
     return "google.colab" in sys.modules
 
 
-def default_excel_path() -> Path:
-    return DEFAULT_COLAB_EXCEL_PATH if running_in_colab() else DEFAULT_LOCAL_EXCEL_PATH
-
-
 def default_base_dir() -> Path:
-    return DEFAULT_COLAB_BASE_DIR if running_in_colab() else DEFAULT_LOCAL_BASE_DIR
+    if running_in_colab():
+        return DEFAULT_COLAB_BASE_DIR
+    env_path = os.environ.get(BASE_DIR_ENV_VAR)
+    if env_path:
+        return Path(env_path)
+    if sys.platform == "win32":
+        return DEFAULT_WINDOWS_BASE_DIR
+    return DEFAULT_LINUX_BASE_DIR
+
+
+def default_excel_path() -> Path:
+    env_path = os.environ.get(EXCEL_PATH_ENV_VAR)
+    if env_path:
+        return Path(env_path)
+    return default_base_dir() / EXCEL_FILENAME
 
 
 def normalize_value(value: object) -> str:

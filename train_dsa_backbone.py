@@ -44,7 +44,11 @@ BACKBONE = BackboneSpec(
     name="vjepa2",
     pretrained_name="facebook/vjepa2-vitl-fpc64-256",
     input_key="pixel_values_videos",
-    clip_length=64,
+    # V-JEPA 2's downstream video-classification protocol probes with 16-frame
+    # clips (not the 64 used in pretraining). Fewer frames = far less memory and
+    # far less overfitting risk on a <400-study dataset. Tune upward if contrast
+    # dynamics turn out to matter.
+    clip_length=16,
     image_size=256,
 )
 
@@ -330,6 +334,22 @@ def stage_label_names(stage: str) -> list[str]:
     return ["negative", "positive"]
 
 
+def compute_class_weights(
+    records: Sequence[OcclusionRecord],
+    stage: str,
+    label_names: Sequence[str],
+) -> torch.Tensor:
+    """Inverse-frequency weights so the dominant class (e.g. L M2) can't swamp training."""
+    counts = summarize_stage(records, stage)
+    total = sum(counts.values())
+    num_labels = len(label_names)
+    weights = [
+        (total / (num_labels * counts.get(name, 0))) if counts.get(name, 0) else 0.0
+        for name in label_names
+    ]
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def summarize_stage(records: Sequence[OcclusionRecord], stage: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for record in records:
@@ -341,7 +361,12 @@ def summarize_stage(records: Sequence[OcclusionRecord], stage: str) -> dict[str,
     return counts
 
 
-def evaluate(model: nn.Module, loader: DataLoader[dict[str, Any]], device: torch.device) -> dict[str, float]:
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader[dict[str, Any]],
+    device: torch.device,
+    class_weights: torch.Tensor | None = None,
+) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -351,7 +376,7 @@ def evaluate(model: nn.Module, loader: DataLoader[dict[str, Any]], device: torch
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["labels"].to(device)
             logits = model(pixel_values)
-            loss = F.cross_entropy(logits, labels)
+            loss = F.cross_entropy(logits, labels, weight=class_weights)
             predictions = logits.argmax(dim=-1)
             total_loss += float(loss.item()) * labels.size(0)
             total_correct += int((predictions == labels).sum().item())
@@ -370,6 +395,7 @@ def train_one_epoch(
     loader: DataLoader[dict[str, Any]],
     optimizer: AdamW,
     device: torch.device,
+    class_weights: torch.Tensor | None = None,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -382,7 +408,7 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         logits = model(pixel_values)
-        loss = F.cross_entropy(logits, labels)
+        loss = F.cross_entropy(logits, labels, weight=class_weights)
         loss.backward()
         optimizer.step()
 
@@ -451,8 +477,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker count.")
     parser.add_argument(
         "--freeze-backbone",
+        dest="freeze_backbone",
         action="store_true",
-        help="Freeze the encoder and train only the task head. Useful for the positive-only warm-up stage.",
+        default=True,
+        help="Freeze the encoder and train only the task head (default; best for <400 studies).",
+    )
+    parser.add_argument(
+        "--unfreeze-backbone",
+        dest="freeze_backbone",
+        action="store_false",
+        help="Full fine-tune the encoder. Needs more data + regularization; overfits easily at this scale.",
     )
     parser.add_argument(
         "--dry-run",
@@ -515,6 +549,8 @@ def main() -> int:
         return 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    class_weights = compute_class_weights(train_records, args.stage, label_names).to(device)
+    print(f"Class weights: {dict(zip(label_names, class_weights.tolist()))}")
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -541,13 +577,13 @@ def main() -> int:
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = train_one_epoch(model, train_loader, optimizer, device)
+        train_metrics = train_one_epoch(model, train_loader, optimizer, device, class_weights)
         print(
             f"Epoch {epoch}: train_loss={train_metrics['loss']:.4f} "
             f"train_acc={train_metrics['accuracy']:.4f}"
         )
         if val_loader is not None:
-            val_metrics = evaluate(model, val_loader, device)
+            val_metrics = evaluate(model, val_loader, device, class_weights)
             print(
                 f"Epoch {epoch}: val_loss={val_metrics['loss']:.4f} "
                 f"val_acc={val_metrics['accuracy']:.4f}"

@@ -1,3 +1,7 @@
+# PHI-containing label spreadsheets - never commit patient data
+*.xlsx
+*.xls
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

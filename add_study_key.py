@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from occlusion_loader import default_base_dir
+
 
 def normalize_value(value: object) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -20,7 +22,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--excel",
-        default=r"H:\My Drive\M2_M3_data\Accession_MRN_AP_Lateral_Labels_Split.xlsx",
+        default=str(default_base_dir() / "AP_Lateral_Labels_Split.xlsx"),
         help="Path to the Excel file to update.",
     )
     parser.add_argument(
