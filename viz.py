@@ -143,6 +143,27 @@ def save_per_class_bars(per_class: dict, label_names: Sequence[str], path: Path,
     plt.close(fig)
 
 
+def save_metric_hbar(labels: Sequence[str], values: Sequence[float], path: Path,
+                     title: str = "", baseline: float | None = None) -> None:
+    """Horizontal bar chart comparing a metric across many recipes."""
+    fig, ax = plt.subplots(figsize=(8, max(3, len(labels) * 0.42)))
+    y = np.arange(len(labels))
+    ax.barh(y, values, color="#4c78a8")
+    ax.set_yticks(y, labels=labels, fontsize=8)
+    ax.set_xlabel("macro-F1")
+    ax.set_xlim(0, max(0.6, max(values) * 1.15) if values else 1)
+    for i, v in enumerate(values):
+        ax.text(v, i, f" {v:.3f}", va="center", fontsize=7)
+    if baseline is not None:
+        ax.axvline(baseline, color="crimson", ls="--", lw=1, label=f"baseline {baseline:.3f}")
+        ax.legend(fontsize=8, loc="lower right")
+    ax.set_title(title)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+
+
 def save_predictions_csv(y_true: np.ndarray, y_pred: np.ndarray, probs: np.ndarray,
                          label_names: Sequence[str], metadata: Sequence[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

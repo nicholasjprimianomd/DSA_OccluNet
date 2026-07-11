@@ -133,6 +133,8 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--standardize", action=argparse.BooleanOptionalAction, default=True,
+                   help="Z-score features per fold before the probe (fit on train only). On by default.")
     p.add_argument("--out", default="runs/cv", help="Directory for report, plots, predictions, cache.")
     return p.parse_args()
 
@@ -167,9 +169,15 @@ def main() -> int:
     oof_prob = np.zeros((len(y), num_classes), dtype=float)
     per_fold = []
 
+    from sklearn.preprocessing import StandardScaler
     for fold, (tr, va) in enumerate(skf.split(X, y, groups), 1):
-        clf = train_probe(X[tr], y[tr], num_classes, device, args.head_epochs, args.lr, args.seed)
-        pred, prob = predict(clf, X[va], device)
+        # Per-fold standardization (fit on train only) — the one universally-helpful
+        # preprocessing step found by experiments.py (+~0.04 macro-F1).
+        scaler = StandardScaler().fit(X[tr]) if args.standardize else None
+        Xtr = scaler.transform(X[tr]) if scaler else X[tr]
+        Xva = scaler.transform(X[va]) if scaler else X[va]
+        clf = train_probe(Xtr, y[tr], num_classes, device, args.head_epochs, args.lr, args.seed)
+        pred, prob = predict(clf, Xva, device)
         oof_pred[va], oof_prob[va] = pred, prob
         fm = M.compute_metrics(y[va], pred, num_classes)
         per_fold.append({"fold": fold, "n_train": len(tr), "n_val": len(va),
