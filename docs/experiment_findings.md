@@ -13,6 +13,7 @@ All results are **patient-grouped 5-fold cross-validation** (StratifiedGroupKFol
 | Linear probe, raw mean-pooled features (previous default) | 0.42 | 0.41 |
 | **+ standardize features + balanced linear model (best recipe)** | **0.46** | **0.45** |
 | Attentive-pooling probe over tokens | 0.41 | — |
+| Partial fine-tune (last 2 blocks), no-peek / best-epoch | 0.44 / 0.48 | — |
 
 **The one reliable win is feature standardization + a class-balanced linear model**
 (LinearSVC / logistic regression). It's now the default in `cross_validate.py`
@@ -40,7 +41,15 @@ pooling instead of mean. **No help** (AP 0.41). This is the important negative: 
 pooling over the full token sequence can't separate m3, the m2/m3 distinction is **not
 present in the frozen features** — so a better *head* won't fix it.
 
-**4. Label-scheme diagnostics** — same features, different targets:
+**4. Partial fine-tuning** ([finetune.py](../finetune.py)) — unfreeze the last 2 of 24 encoder
+blocks + final norm + head, discriminative LRs (backbone 1e-5 / head 1e-3), head-only warmup,
+gradient clipping, class-weighted loss, 5-fold. **No reliable gain.** The no-peek (final-epoch)
+OOF macro-F1 was **0.44 — below the frozen 0.46**; the optimistic best-epoch peek (0.48) is
+within fold-to-fold noise (folds 0.40–0.53). The training curve is textbook overfitting:
+train accuracy climbs 0.43→0.72 while held-out val macro-F1 stays flat (~0.38) and never clears
+the frozen line. m3 stayed ~0.23. ~290 samples is simply too little to move a 300M-param ViT-L.
+
+**5. Label-scheme diagnostics** — same features, different targets:
 
 | Target | AP macro-F1 | Note |
 |---|---|---|
@@ -61,12 +70,15 @@ pipeline) are working correctly.
    MCA branches; better heads (attentive pooling), richer pooling, and view fusion all fail
    to recover the distinction. The evidence (global L/R easy, local M2/M3 hard) says the
    detail isn't in the mean/token features as-is.
-3. **The only remaining lever that can inject m3 signal is changing the features**, not the
-   head:
-   - **Backbone fine-tuning** (unfreeze the last few blocks, heavy regularization). Highest
-     upside, real overfitting risk on ~290 samples — do it with this CV harness as the guardrail.
-   - **More frames / higher resolution** at extraction (contrast timing / finer vessels).
+3. **Backbone fine-tuning was tested and does not help at this scale** (experiment 4:
+   overfits, no reliable gain over the frozen probe). So the lever is **not the model** — it's
+   the **inputs and the data**:
+   - **More labeled studies, especially m3** — 67/75 m3 runs is the binding constraint. This is
+     the single highest-value action.
+   - **More frames / higher resolution** at extraction (contrast timing / finer vessels) — the
+     one untested feature-side lever that doesn't need more labels.
    - A **medical/angiography-pretrained** backbone instead of natural-video V-JEPA 2.
+   - Revisit fine-tuning only once the dataset is materially larger.
 4. **Consider the task, not just the model.** Territory (MCA/ACA/PCA) is far more learnable
    (MCA F1 0.94). If m2-vs-m3 isn't clinically essential, reporting MCA/ACA/PCA — or m2 vs
    m3 vs other with honest per-class numbers — is more trustworthy than forcing a

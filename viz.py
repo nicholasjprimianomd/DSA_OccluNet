@@ -143,6 +143,28 @@ def save_per_class_bars(per_class: dict, label_names: Sequence[str], path: Path,
     plt.close(fig)
 
 
+def save_training_curves(epochs: Sequence[int], train_vals: Sequence[float],
+                         val_vals: Sequence[float], path: Path, title: str = "",
+                         train_label: str = "train acc", val_label: str = "val macro-F1",
+                         frozen_ref: float | None = None) -> None:
+    """Train vs held-out val across epochs — the overfitting tell (train climbs, val flat/down)."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(epochs, train_vals, "-o", ms=3, label=train_label, color="#4c78a8")
+    ax.plot(epochs, val_vals, "-o", ms=3, label=val_label, color="#e45756")
+    if frozen_ref is not None:
+        ax.axhline(frozen_ref, ls="--", lw=1, color="gray", label=f"frozen probe {frozen_ref:.2f}")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("score")
+    ax.set_ylim(0, 1)
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+
+
 def save_metric_hbar(labels: Sequence[str], values: Sequence[float], path: Path,
                      title: str = "", baseline: float | None = None) -> None:
     """Horizontal bar chart comparing a metric across many recipes."""
