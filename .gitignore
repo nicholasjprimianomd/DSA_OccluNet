@@ -2,6 +2,10 @@
 *.xlsx
 *.xls
 
+# Training outputs: checkpoints, visualizations, logs
+runs/
+*.pt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
