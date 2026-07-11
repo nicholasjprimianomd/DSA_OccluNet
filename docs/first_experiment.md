@@ -132,11 +132,13 @@ Passing `--viz-dir DIR` writes, as training runs, exactly what goes **into** and
 The current `train_dsa_backbone.py` runs and trains, but for the experiment above to be
 publication-grade, these are the gaps (roughly in priority order):
 
-1. **Cross-validation harness.** Today `split_records` uses the spreadsheet's `Split`
-   column (single split). Add patient-grouped, stratified k-fold (group on `Study_Key`) and
-   report mean ± std across folds.
-2. **Real metrics.** Today only loss + accuracy are logged. Add macro-F1, balanced
-   accuracy, per-class recall, and a confusion matrix (e.g. via `sklearn.metrics`).
+1. **Cross-validation harness — DONE.** [cross_validate.py](../cross_validate.py) does
+   patient-grouped, stratified k-fold (`StratifiedGroupKFold` on `Study_Key`), extracting
+   frozen V-JEPA 2 features once (cached) and probing them per fold, reporting mean ± std.
+   Run: `python cross_validate.py --view AP --stage positive_subtype --folds 5 --device cuda --amp --out runs/ap_cv`.
+2. **Real metrics — DONE.** [metrics.py](../metrics.py) reports macro-F1, balanced accuracy,
+   per-class precision/recall/F1, a majority-class baseline, and an out-of-fold confusion
+   matrix — printed readably and saved as PNG/CSV/JSON/Markdown.
 3. **Attentive-pooling head.** Replace `hidden_state.mean(dim=1)` + linear
    ([train_dsa_backbone.py](../train_dsa_backbone.py)) with a small attentive probe
    (a learnable query + cross-attention), matching V-JEPA 2's downstream recipe. Keep it

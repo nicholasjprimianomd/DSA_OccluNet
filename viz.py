@@ -121,6 +121,28 @@ def save_embedding_scatter(features: np.ndarray, labels: np.ndarray, label_names
     plt.close(fig)
 
 
+def save_per_class_bars(per_class: dict, label_names: Sequence[str], path: Path,
+                        title: str = "Per-class metrics") -> None:
+    """Grouped bars of precision / recall / F1 per class — see which class the model fails."""
+    metrics = ["precision", "recall", "f1"]
+    x = np.arange(len(label_names))
+    width = 0.25
+    fig, ax = plt.subplots(figsize=(max(5, len(label_names) * 1.4), 4))
+    for i, m in enumerate(metrics):
+        ax.bar(x + (i - 1) * width, per_class[m], width, label=m)
+    ax.set_xticks(x, labels=[f"{n}\n(n={int(s)})" for n, s in zip(label_names, per_class["support"])],
+                  fontsize=8)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("score")
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+
+
 def save_predictions_csv(y_true: np.ndarray, y_pred: np.ndarray, probs: np.ndarray,
                          label_names: Sequence[str], metadata: Sequence[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
