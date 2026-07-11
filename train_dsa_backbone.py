@@ -153,9 +153,10 @@ class BackboneReadyDataset(Dataset[TaskSample]):
         stage: str,
         label_names: Sequence[str],
         treat_blank_as_negative: bool = False,
+        spec: BackboneSpec = BACKBONE,
     ) -> None:
         self.base_dataset = base_dataset
-        self.spec = BACKBONE
+        self.spec = spec
         self.stage = stage
         self.label_names = list(label_names)
         self.label_to_index = {name: index for index, name in enumerate(self.label_names)}

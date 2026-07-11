@@ -49,7 +49,13 @@ within fold-to-fold noise (folds 0.40–0.53). The training curve is textbook ov
 train accuracy climbs 0.43→0.72 while held-out val macro-F1 stays flat (~0.38) and never clears
 the frozen line. m3 stayed ~0.23. ~290 samples is simply too little to move a 300M-param ViT-L.
 
-**5. Label-scheme diagnostics** — same features, different targets:
+**5. More frames** — re-extracted at 32 frames/clip (your DSA runs are ~20 frames median,
+max 34, so 32 uses every real frame; 64 would only interpolate). AP best macro-F1 **0.44 —
+slightly below the 16-frame 0.46**, m3 unchanged (0.20). 16 frames already captured the
+temporal signal; upsampling ~20-frame runs to 32 just adds redundancy. `experiments.py
+--clip-length N` supports this if revisited with more data.
+
+**6. Label-scheme diagnostics** — same features, different targets:
 
 | Target | AP macro-F1 | Note |
 |---|---|---|
@@ -75,9 +81,9 @@ pipeline) are working correctly.
    the **inputs and the data**:
    - **More labeled studies, especially m3** — 67/75 m3 runs is the binding constraint. This is
      the single highest-value action.
-   - **More frames / higher resolution** at extraction (contrast timing / finer vessels) — the
-     one untested feature-side lever that doesn't need more labels.
-   - A **medical/angiography-pretrained** backbone instead of natural-video V-JEPA 2.
+   - A **medical/angiography-pretrained** backbone instead of natural-video V-JEPA 2, and/or
+     **higher spatial resolution** (finer vessels). More *frames* was tested (experiment 5) and
+     does not help — the data caps at ~34 frames and 16 already suffices.
    - Revisit fine-tuning only once the dataset is materially larger.
 4. **Consider the task, not just the model.** Territory (MCA/ACA/PCA) is far more learnable
    (MCA F1 0.94). If m2-vs-m3 isn't clinically essential, reporting MCA/ACA/PCA — or m2 vs
