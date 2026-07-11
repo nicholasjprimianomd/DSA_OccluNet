@@ -161,6 +161,29 @@ Items 1–2 are the minimum to trust the numbers; 3–4 are the likely accuracy 
 - Data location is resolved via `DSA_BASE_DIR` / `DSA_EXCEL_PATH` env vars (Linux default
   `~/M2_M3_data`); set `DSA_BASE_DIR` once the data drive is mounted.
 
+### Data recovery (done)
+
+The DSA data was not on a normal disk path — it lived in the **Google Drive for Desktop
+stream cache** on the Windows partition (`…/AppData/Local/Google/DriveFS/<account>/`),
+because `H:\My Drive\M2_M3_data` was streamed, not mirrored. The cached blobs are
+plaintext DICOM (not encrypted) and the folder was pinned available-offline, so the whole
+set is present locally. [scripts/extract_drive_cache.py](../scripts/extract_drive_cache.py)
+reconstructs `M2_M3_data/<accession>/<file>.dcm` from that cache:
+
+```bash
+# durable copy of just the ~700 labeled runs (~29 GB) into ~/M2_M3_data
+python scripts/extract_drive_cache.py \
+    --drivefs "/run/media/<you>/<vol>/Users/nprim/AppData/Local/Google/DriveFS/<account_id>" \
+    --folder M2_M3_data --out ~/M2_M3_data --mode copy \
+    --referenced-xlsx ~/M2_M3_data/AP_Lateral_Labels_Split.xlsx --verify
+export DSA_BASE_DIR=~/M2_M3_data
+```
+
+Result: **366 AP + 328 Lateral = 694 labeled runs** resolve (≈31 referenced runs were
+never cached). Drop `--referenced-xlsx` and use `--mode symlink` to expose the full tree
+instantly (needs the Windows drive mounted). The Windows NTFS partition auto-unmounts on
+idle, so the `copy` mode above is what makes the labeled set survive reboots.
+
 ---
 
 ## 7. Risks & limitations to keep in mind
