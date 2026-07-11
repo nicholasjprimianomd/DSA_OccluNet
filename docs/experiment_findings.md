@@ -14,6 +14,8 @@ All results are **patient-grouped 5-fold cross-validation** (StratifiedGroupKFol
 | **+ standardize features + balanced linear model (best recipe)** | **0.46** | **0.45** |
 | Attentive-pooling probe over tokens | 0.41 | — |
 | Partial fine-tune (last 2 blocks), no-peek / best-epoch | 0.44 / 0.48 | — |
+| **Higher resolution: V-JEPA 2 ViT-g @ 384px** | **0.48** | — |
+| Medical backbone: RadImageNet ResNet50 (per-frame) | 0.41 | — |
 
 **The one reliable win is feature standardization + a class-balanced linear model**
 (LinearSVC / logistic regression). It's now the default in `cross_validate.py`
@@ -55,7 +57,22 @@ slightly below the 16-frame 0.46**, m3 unchanged (0.20). 16 frames already captu
 temporal signal; upsampling ~20-frame runs to 32 just adds redundancy. `experiments.py
 --clip-length N` supports this if revisited with more data.
 
-**6. Label-scheme diagnostics** — same features, different targets:
+**6. Higher spatial resolution** ([experiments.py](../experiments.py) `--backbone
+facebook/vjepa2-vitg-fpc64-384 --image-size 384`) — your DICOMs are 1024², so 256px throws
+away detail. The official 384px ViT-g checkpoint lifts AP best macro-F1 to **0.48** (from
+0.46). The gain is real but lands on the easy classes: **other_positive F1 0.44→0.55** and
+m2 0.70→0.76, while **m3 got *worse* (0.24→0.12)**. Higher resolution sharpens the distinct
+territories; it doesn't rescue the m2/m3 subtlety. Caveat: this also swaps ViT-L→ViT-g, so
+resolution and model size are confounded. Worth adopting if the extra compute is acceptable.
+
+**7. Medical backbone: RadImageNet** ([radimagenet_probe.py](../radimagenet_probe.py)) — there
+is **no public angiography video backbone**; the closest medical option is RadImageNet (CNNs
+trained only on radiology, incl. angiography/X-ray), applied per-frame + temporal mean-pool.
+AP best macro-F1 **0.41 — worse than V-JEPA 2's 0.46.** A 2D CNN trained on static CT/MR/US
+slices doesn't beat a large natural-video model here; V-JEPA 2's temporal modeling and scale
+win despite the domain mismatch.
+
+**8. Label-scheme diagnostics** — same features, different targets:
 
 | Target | AP macro-F1 | Note |
 |---|---|---|
@@ -80,10 +97,12 @@ pipeline) are working correctly.
    overfits, no reliable gain over the frozen probe). So the lever is **not the model** — it's
    the **inputs and the data**:
    - **More labeled studies, especially m3** — 67/75 m3 runs is the binding constraint. This is
-     the single highest-value action.
-   - A **medical/angiography-pretrained** backbone instead of natural-video V-JEPA 2, and/or
-     **higher spatial resolution** (finer vessels). More *frames* was tested (experiment 5) and
-     does not help — the data caps at ~34 frames and 16 already suffices.
+     the single highest-value action, and after testing every model-side lever it's the only
+     thing left that can move m3.
+   - **Higher spatial resolution helps the easy classes** (ViT-g @ 384px → 0.48, experiment 6) —
+     adopt it if compute allows, but it doesn't fix m3.
+   - A **medical backbone does not help** (RadImageNet, experiment 7, 0.41 < 0.46) and no public
+     angiography video model exists. More *frames* doesn't help either (experiment 5).
    - Revisit fine-tuning only once the dataset is materially larger.
 4. **Consider the task, not just the model.** Territory (MCA/ACA/PCA) is far more learnable
    (MCA F1 0.94). If m2-vs-m3 isn't clinically essential, reporting MCA/ACA/PCA — or m2 vs

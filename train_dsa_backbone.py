@@ -190,9 +190,9 @@ class BackboneReadyDataset(Dataset[TaskSample]):
 
 
 class DsaVideoClassifier(nn.Module):
-    def __init__(self, num_labels: int, freeze_backbone: bool = False) -> None:
+    def __init__(self, num_labels: int, freeze_backbone: bool = False, spec: BackboneSpec = BACKBONE) -> None:
         super().__init__()
-        self.spec = BACKBONE
+        self.spec = spec
         self.backbone = self._load_backbone(self.spec.pretrained_name)
         hidden_size = self._hidden_size(self.backbone)
         self.classifier = nn.Linear(hidden_size, num_labels)

@@ -49,12 +49,22 @@ from train_dsa_backbone import (
 
 
 # ---- rich feature extraction (mean / max / std pooling over tokens) --------------------
-def extract_rich_features(view, stage, records, device, amp, batch_size, num_workers, clip_length=None):
-    spec = BACKBONE if clip_length is None else dataclasses.replace(BACKBONE, clip_length=clip_length)
+def make_spec(clip_length=None, backbone=None, image_size=None):
+    kw = {}
+    if clip_length is not None:
+        kw["clip_length"] = clip_length
+    if backbone is not None:
+        kw["pretrained_name"] = backbone
+    if image_size is not None:
+        kw["image_size"] = image_size
+    return dataclasses.replace(BACKBONE, **kw) if kw else BACKBONE
+
+
+def extract_rich_features(view, stage, records, device, amp, batch_size, num_workers, spec):
     dataset = BackboneReadyDataset(build_base_dataset(view, records), stage, stage_label_names(stage), spec=spec)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                         num_workers=num_workers, collate_fn=collate_task_samples)
-    model = DsaVideoClassifier(num_labels=len(stage_label_names(stage)), freeze_backbone=True).to(device)
+    model = DsaVideoClassifier(num_labels=len(stage_label_names(stage)), freeze_backbone=True, spec=spec).to(device)
     model.eval()
 
     means, maxes, stds, labels, groups, meta = [], [], [], [], [], []
@@ -83,15 +93,15 @@ def extract_rich_features(view, stage, records, device, amp, batch_size, num_wor
     }
 
 
-def load_or_extract(cache, view, stage, records, device, amp, batch_size, num_workers, clip_length=None):
-    tag = f"_f{clip_length}" if clip_length else ""
+def load_or_extract(cache, view, stage, records, device, amp, batch_size, num_workers, spec):
+    tag = f"_f{spec.clip_length}_{spec.pretrained_name.split('/')[-1]}_{spec.image_size}"
     path = Path(cache) / f"rich_{view}_{stage}{tag}.npz"
     if path.exists():
         d = np.load(path, allow_pickle=True)
         if len(d["labels"]) == len(records):
             print(f"Using cached rich features: {path}")
             return {k: d[k] for k in ("mean", "max", "std", "labels", "groups")} | {"meta": list(d["meta"])}
-    data = extract_rich_features(view, stage, records, device, amp, batch_size, num_workers, clip_length)
+    data = extract_rich_features(view, stage, records, device, amp, batch_size, num_workers, spec)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(path, **{k: v for k, v in data.items() if k != "meta"}, meta=np.array(data["meta"], dtype=object))
     return data
@@ -171,6 +181,9 @@ def parse_args():
     p.add_argument("--clip-length", type=int, default=None,
                    help="Override frames per clip (default 16). DSA runs max ~34 frames, so 32 uses "
                    "every real frame; higher just interpolates.")
+    p.add_argument("--backbone", default=None,
+                   help="Override the V-JEPA 2 checkpoint, e.g. facebook/vjepa2-vitg-fpc64-384 for higher resolution.")
+    p.add_argument("--image-size", type=int, default=None, help="Override input resolution (match the backbone).")
     p.add_argument("--out", default="runs/exp")
     return p.parse_args()
 
@@ -188,11 +201,11 @@ def main() -> int:
     label_names = stage_label_names(args.stage)
     num_classes = len(label_names)
 
-    clip_len = args.clip_length or BACKBONE.clip_length
+    spec = make_spec(args.clip_length, args.backbone, args.image_size)
     print(f"Extracting rich features for {len(records)} {args.view} runs "
-          f"(frozen {BACKBONE.pretrained_name}, clip_length={clip_len})…")
+          f"(frozen {spec.pretrained_name}, clip_length={spec.clip_length}, image_size={spec.image_size})…")
     data = load_or_extract(out / "cache", args.view, args.stage, records,
-                           device, args.amp, args.batch_size, args.num_workers, args.clip_length)
+                           device, args.amp, args.batch_size, args.num_workers, spec)
     y, groups = data["labels"], data["groups"]
     class_counts = {label_names[c]: int((y == c).sum()) for c in range(num_classes)}
 

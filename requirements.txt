@@ -16,3 +16,8 @@ torch
 
 # Only needed to instantiate the real V-JEPA 2 backbone (not for --dry-run / smoke test).
 transformers
+
+# torchvision is only needed for the RadImageNet comparison (radimagenet_probe.py).
+# Install the CUDA build matching your torch, e.g.:
+#   pip install torchvision --index-url https://download.pytorch.org/whl/cu128
+torchvision
