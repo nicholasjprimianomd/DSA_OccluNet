@@ -220,11 +220,16 @@ class DsaVideoClassifier(nn.Module):
                 return value
         raise ValueError("Unable to infer hidden size from backbone config.")
 
-    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, pixel_values: torch.Tensor, return_features: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         outputs = self.backbone(**{self.spec.input_key: pixel_values})
         hidden_state = outputs.last_hidden_state
         pooled = hidden_state.mean(dim=1)
-        return self.classifier(pooled)
+        logits = self.classifier(pooled)
+        if return_features:
+            return logits, pooled
+        return logits
 
 
 def collate_task_samples(batch: Sequence[TaskSample]) -> dict[str, Any]:
@@ -361,11 +366,17 @@ def summarize_stage(records: Sequence[OcclusionRecord], stage: str) -> dict[str,
     return counts
 
 
+def _autocast(device: torch.device, amp: bool):
+    """bf16 autocast on CUDA when --amp is set; a no-op context otherwise."""
+    return torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp and device.type == "cuda")
+
+
 def evaluate(
     model: nn.Module,
     loader: DataLoader[dict[str, Any]],
     device: torch.device,
     class_weights: torch.Tensor | None = None,
+    amp: bool = False,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
@@ -375,8 +386,9 @@ def evaluate(
         for batch in loader:
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["labels"].to(device)
-            logits = model(pixel_values)
-            loss = F.cross_entropy(logits, labels, weight=class_weights)
+            with _autocast(device, amp):
+                logits = model(pixel_values)
+                loss = F.cross_entropy(logits, labels, weight=class_weights)
             predictions = logits.argmax(dim=-1)
             total_loss += float(loss.item()) * labels.size(0)
             total_correct += int((predictions == labels).sum().item())
@@ -396,6 +408,7 @@ def train_one_epoch(
     optimizer: AdamW,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
+    amp: bool = False,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -407,8 +420,9 @@ def train_one_epoch(
         labels = batch["labels"].to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        logits = model(pixel_values)
-        loss = F.cross_entropy(logits, labels, weight=class_weights)
+        with _autocast(device, amp):
+            logits = model(pixel_values)
+            loss = F.cross_entropy(logits, labels, weight=class_weights)
         loss.backward()
         optimizer.step()
 
@@ -422,6 +436,64 @@ def train_one_epoch(
     return {
         "loss": total_loss / total_examples,
         "accuracy": total_correct / total_examples,
+    }
+
+
+def select_device(requested: str) -> torch.device:
+    """Resolve --device and report exactly what training will run on.
+
+    'auto' uses CUDA when available; 'cuda' hard-fails if the GPU stack isn't ready
+    (so a silent CPU fallback can't waste hours on this dataset)."""
+    if requested == "cpu":
+        print("Device: CPU (requested)")
+        return torch.device("cpu")
+
+    cuda_ok = torch.cuda.is_available()
+    if requested == "cuda" and not cuda_ok:
+        raise SystemExit(
+            "--device cuda was requested but torch.cuda.is_available() is False. "
+            "Install a CUDA build of torch (RTX 5090/Blackwell needs cu128), or pass --device cpu."
+        )
+    if cuda_ok:
+        idx = torch.cuda.current_device()
+        name = torch.cuda.get_device_name(idx)
+        total_gb = torch.cuda.get_device_properties(idx).total_memory / 1e9
+        print(f"Device: CUDA:{idx} — {name} ({total_gb:.0f} GB), torch {torch.__version__}")
+        return torch.device("cuda", idx)
+
+    print(f"Device: CPU (no CUDA GPU visible to torch {torch.__version__})")
+    return torch.device("cpu")
+
+
+def collect_outputs(
+    model: nn.Module,
+    loader: DataLoader[dict[str, Any]],
+    device: torch.device,
+    amp: bool = False,
+) -> dict[str, Any]:
+    """Gather logits, probabilities, pooled features, labels, and metadata for visualization."""
+    model.eval()
+    logits_all, feats_all, labels_all = [], [], []
+    metadata_all: list[dict[str, Any]] = []
+    with torch.no_grad():
+        for batch in loader:
+            pixel_values = batch["pixel_values"].to(device)
+            with _autocast(device, amp):
+                logits, feats = model(pixel_values, return_features=True)
+            logits_all.append(logits.float().cpu())
+            feats_all.append(feats.float().cpu())
+            labels_all.append(batch["labels"].cpu())
+            metadata_all.extend(batch["metadata"])
+    if not logits_all:
+        return {"logits": None, "probs": None, "features": None, "labels": None, "metadata": []}
+    logits = torch.cat(logits_all)
+    return {
+        "logits": logits,
+        "probs": torch.softmax(logits, dim=-1).numpy(),
+        "features": torch.cat(feats_all).numpy(),
+        "labels": torch.cat(labels_all).numpy(),
+        "preds": logits.argmax(dim=-1).numpy(),
+        "metadata": metadata_all,
     }
 
 
@@ -475,6 +547,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Optimizer learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Optimizer weight decay.")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker count.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cuda", "cpu"),
+        help="Where to train. 'auto' uses the GPU when available; 'cuda' fails loudly if no GPU.",
+    )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Mixed-precision (bf16) autocast on CUDA. Faster and lower memory on the RTX 5090.",
+    )
+    parser.add_argument(
+        "--viz-dir",
+        default="",
+        help="If set, write input-clip montages, confusion matrices, PCA embedding plots, and "
+        "prediction CSVs here as training progresses.",
+    )
     parser.add_argument(
         "--freeze-backbone",
         dest="freeze_backbone",
@@ -545,10 +634,20 @@ def main() -> int:
     print(f"Preview clip shape: {tuple(preview.pixel_values.shape)}")
     print(f"Preview label: {preview.label_name}")
 
+    viz_dir = Path(args.viz_dir) if args.viz_dir else None
+    if viz_dir is not None:
+        import viz
+
+        viz.save_label_distribution(label_counts, viz_dir / "label_distribution.png",
+                                    title=f"{args.view} / {args.stage} label counts")
+        sample_batch = collate_task_samples([train_dataset[i] for i in range(min(8, len(train_dataset)))])
+        viz.save_input_samples(sample_batch, viz_dir / "inputs", label_names, tag="train")
+        print(f"Wrote input visualizations to {viz_dir}")
+
     if args.dry_run:
         return 0
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device(args.device)
     class_weights = compute_class_weights(train_records, args.stage, label_names).to(device)
     print(f"Class weights: {dict(zip(label_names, class_weights.tolist()))}")
     train_loader = DataLoader(
@@ -577,17 +676,39 @@ def main() -> int:
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = train_one_epoch(model, train_loader, optimizer, device, class_weights)
+        train_metrics = train_one_epoch(model, train_loader, optimizer, device, class_weights, args.amp)
         print(
             f"Epoch {epoch}: train_loss={train_metrics['loss']:.4f} "
             f"train_acc={train_metrics['accuracy']:.4f}"
         )
         if val_loader is not None:
-            val_metrics = evaluate(model, val_loader, device, class_weights)
+            val_metrics = evaluate(model, val_loader, device, class_weights, args.amp)
             print(
                 f"Epoch {epoch}: val_loss={val_metrics['loss']:.4f} "
                 f"val_acc={val_metrics['accuracy']:.4f}"
             )
+            if viz_dir is not None:
+                import viz
+
+                out = collect_outputs(model, val_loader, device, args.amp)
+                if out["labels"] is not None:
+                    epoch_dir = viz_dir / f"epoch_{epoch:03d}"
+                    macro = viz.macro_f1(out["labels"], out["preds"], len(label_names))
+                    print(f"Epoch {epoch}: val_macro_f1={macro:.4f}")
+                    viz.save_confusion_matrix(
+                        out["labels"], out["preds"], label_names,
+                        epoch_dir / "confusion_matrix.png",
+                        title=f"{args.view} val epoch {epoch} (macro-F1={macro:.3f})",
+                    )
+                    viz.save_embedding_scatter(
+                        out["features"], out["labels"], label_names,
+                        epoch_dir / "embeddings_pca.png",
+                        title=f"{args.view} val pooled features, epoch {epoch}",
+                    )
+                    viz.save_predictions_csv(
+                        out["labels"], out["preds"], out["probs"], label_names,
+                        out["metadata"], epoch_dir / "predictions.csv",
+                    )
 
     if args.save_path:
         save_path = Path(args.save_path)

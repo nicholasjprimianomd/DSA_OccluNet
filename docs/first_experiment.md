@@ -88,12 +88,30 @@ python train_dsa_backbone.py --view AP --stage positive_subtype --dry-run
 Train (per view), once `transformers` + GPU torch are installed and data is mounted:
 
 ```bash
-python train_dsa_backbone.py --view AP      --stage positive_subtype --epochs 30 --save-path runs/ap_subtype.pt
-python train_dsa_backbone.py --view Lateral --stage positive_subtype --epochs 30 --save-path runs/lat_subtype.pt
+python train_dsa_backbone.py --view AP      --stage positive_subtype --epochs 30 \
+    --device cuda --amp --viz-dir runs/ap_subtype/viz  --save-path runs/ap_subtype.pt
+python train_dsa_backbone.py --view Lateral --stage positive_subtype --epochs 30 \
+    --device cuda --amp --viz-dir runs/lat_subtype/viz --save-path runs/lat_subtype.pt
 ```
 
-`--freeze-backbone` is the default; add `--unfreeze-backbone` only to test full
-fine-tuning as an ablation.
+- `--device cuda` fails loudly instead of silently falling back to CPU; `--amp` turns on
+  bf16 mixed precision (faster + lower memory on the RTX 5090).
+- `--freeze-backbone` is the default; add `--unfreeze-backbone` only to test full
+  fine-tuning as an ablation.
+
+### Visualization (`--viz-dir`)
+
+Passing `--viz-dir DIR` writes, as training runs, exactly what goes **into** and comes
+**out of** the model (see [viz.py](../viz.py)):
+
+- `inputs/…png` — montages of the 16 preprocessed frames per sample (what the backbone
+  actually sees), titled with class / view / accession.
+- `label_distribution.png` — class balance for the split.
+- `epoch_NNN/confusion_matrix.png` — val confusion matrix, titled with **macro-F1**.
+- `epoch_NNN/embeddings_pca.png` — 2-D PCA of the pooled backbone features, colored by
+  class: shows whether V-JEPA 2's representation separates the subtypes at all.
+- `epoch_NNN/predictions.csv` — per-sample true/pred/probabilities with accession + run,
+  for error review.
 
 ---
 

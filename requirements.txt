@@ -1,0 +1,18 @@
+# Core data + training deps for DSA_OccluNet.
+# Verified on Python 3.14 (CachyOS) with an RTX 5090.
+numpy
+pandas
+pydicom
+openpyxl
+matplotlib
+scikit-learn
+
+# PyTorch: install the CUDA build that matches your GPU BEFORE the line below,
+# because the default PyPI wheel is CPU-only. For the RTX 5090 (Blackwell / sm_120)
+# use the cu128 build:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# (CPU-only is fine for --dry-run and scripts/smoke_test.py.)
+torch
+
+# Only needed to instantiate the real V-JEPA 2 backbone (not for --dry-run / smoke test).
+transformers

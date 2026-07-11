@@ -96,7 +96,8 @@ class _DummyBackbone(nn.Module):
         return types.SimpleNamespace(last_hidden_state=self.fc(x.mean(dim=(3, 4))))
 
 
-def _run_case(T, view: str, stage: str, freeze: bool) -> None:
+def _run_case(T, view: str, stage: str, freeze: bool, device: torch.device,
+              viz_dir=None) -> None:
     args = types.SimpleNamespace(
         excel=str(T.default_excel_path()), base_dir=str(T.default_base_dir()),
         view=view, stage=stage, treat_blank_as_negative=(stage == "binary_detection"),
@@ -106,7 +107,7 @@ def _run_case(T, view: str, stage: str, freeze: bool) -> None:
     records = T.build_records(args)
     label_names = T.stage_label_names(stage)
     train_records, val_records = T.split_records(records)
-    device = torch.device("cpu")
+    amp = device.type == "cuda"
     class_weights = T.compute_class_weights(train_records, stage, label_names).to(device)
 
     train_ds = T.BackboneReadyDataset(
@@ -119,13 +120,32 @@ def _run_case(T, view: str, stage: str, freeze: bool) -> None:
     clip_shape = tuple(train_ds[0].pixel_values.shape)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    metrics = T.train_one_epoch(model, loader, opt, device, class_weights)
+    metrics = T.train_one_epoch(model, loader, opt, device, class_weights, amp)
     assert np.isfinite(metrics["loss"]), f"non-finite loss for {view}/{stage}"
     assert clip_shape == (T.BACKBONE.clip_length, 3, T.BACKBONE.image_size, T.BACKBONE.image_size)
     if freeze:
         assert trainable < total, "freeze should reduce trainable params"
 
-    print(f"  [{view:<7} {stage:<16} freeze={freeze!s:<5}] "
+    # Exercise the visualization path (inputs + outputs) on one case.
+    if viz_dir is not None and val_records:
+        import viz
+        val_ds = T.BackboneReadyDataset(
+            T.build_base_dataset(view, val_records), stage, label_names, args.treat_blank_as_negative
+        )
+        val_loader = DataLoader(val_ds, batch_size=2, collate_fn=T.collate_task_samples)
+        sample = T.collate_task_samples([train_ds[i] for i in range(min(4, len(train_ds)))])
+        viz.save_input_samples(sample, viz_dir / "inputs", label_names, tag="train")
+        out = T.collect_outputs(model, val_loader, device, amp)
+        viz.save_confusion_matrix(out["labels"], out["preds"], label_names,
+                                  viz_dir / "confusion_matrix.png")
+        viz.save_embedding_scatter(out["features"], out["labels"], label_names,
+                                   viz_dir / "embeddings_pca.png")
+        viz.save_predictions_csv(out["labels"], out["preds"], out["probs"], label_names,
+                                 out["metadata"], viz_dir / "predictions.csv")
+        made = sorted(p.name for p in viz_dir.rglob("*") if p.is_file())
+        print(f"  viz artifacts: {made}")
+
+    print(f"  [{view:<7} {stage:<16} freeze={freeze!s:<5}] dev={device.type} amp={amp} "
           f"clip={clip_shape} trainable={trainable}/{total} loss={metrics['loss']:.3f}")
 
 
@@ -138,11 +158,18 @@ def main() -> int:
         import train_dsa_backbone as T
         T.DsaVideoClassifier._load_backbone = staticmethod(lambda name: _DummyBackbone())
 
-        print("Data pipeline + training loop:")
-        _run_case(T, "AP", "positive_subtype", freeze=True)       # runnable-now experiment
-        _run_case(T, "Lateral", "positive_subtype", freeze=True)
-        _run_case(T, "AP", "positive_subtype", freeze=False)      # full fine-tune path
-        _run_case(T, "AP", "binary_detection", freeze=True)       # future path (needs normals)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type == "cuda":
+            print(f"GPU: {torch.cuda.get_device_name(0)} — training on CUDA")
+        else:
+            print("No CUDA GPU visible — running on CPU (pipeline still validated)")
+
+        viz_dir = Path(tmp) / "viz"
+        print("\nData pipeline + training loop:")
+        _run_case(T, "AP", "positive_subtype", freeze=True, device=device, viz_dir=viz_dir)
+        _run_case(T, "Lateral", "positive_subtype", freeze=True, device=device)
+        _run_case(T, "AP", "positive_subtype", freeze=False, device=device)  # full fine-tune path
+        _run_case(T, "AP", "binary_detection", freeze=True, device=device)   # future path (needs normals)
 
     print("\nSMOKE TEST PASSED")
     return 0
