@@ -22,3 +22,13 @@ transformers
 # Install the CUDA build matching your torch, e.g.:
 #   pip install torchvision --index-url https://download.pytorch.org/whl/cu128
 torchvision
+
+# Hand-crafted radiomics features (radiomics_probe.py) for the classical-ML ensemble
+# (ensemble_experiments.py). PyRadiomics is imported lazily, so it is NOT required for the
+# neural probes, the ensemble on precomputed caches, or --synthetic-demo. Its published
+# wheel does not build against NumPy >= 2 / recent Python, so install it in an ISOLATED
+# environment and point radiomics_probe.py at that interpreter:
+#   python3 -m venv .venv-radiomics
+#   .venv-radiomics/bin/pip install "numpy<2" SimpleITK pyradiomics
+# pyradiomics
+# SimpleITK

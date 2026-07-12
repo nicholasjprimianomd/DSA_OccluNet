@@ -261,6 +261,25 @@ patient groups, so it is not a new headline result or evidence that composite pr
 mapping is generally safe. Strict paired fusion remains the defensible primary result;
 multilabel supervision is the right destination once more composite patients exist.
 
+**16. Classical SVM + radiomics ensembled with the best neural probe**
+([full report](ensemble_experiments.md)) — since the attentive-pooling probe (finding 3)
+showed the m2/m3 distinction is only weakly present *in the deep features*, a better head
+cannot fix m3; a different *view* might. [radiomics_probe.py](../radiomics_probe.py) extracts
+hand-crafted PyRadiomics texture features (first-order + GLCM/GLRLM/GLSZM/GLDM/NGTDM, plus
+2-D shape on an Otsu ROI) per sampled frame and pools them over time into the same aligned
+`.npz` cache format as the neural probes. [ensemble_experiments.py](../ensemble_experiments.py)
+then fuses a calibrated RBF-SVM over radiomics with the best deep probe (optionally the
+V-JEPA+DINO early fusion) via equal/weighted late fusion, a stacking meta-learner, and early
+feature-concatenation — all over the same 20 patient-grouped seeds, with every learned
+combiner fit by an *inner* grouped CV on training patients only, so the ensemble is leak-free.
+The code is validated end-to-end on synthetic grouped data (a weak-but-independent second
+view lifts the synthetic minority class by ~0.15 F1, confirming the mechanism and the
+fold/leakage discipline), **but has not yet been run on the real cohort** — it was written
+without the PHI data or GPU present. The report has ready-to-run commands and a results table
+to fill in. The main risk is that whole-frame radiomics (no vessel segmentation) may not carry
+independent m3 signal; if so, the next step is a real vessel mask rather than abandoning the
+ensemble.
+
 ## Conclusions
 
 1. **Ship correct checkpoint normalization and fold-local feature standardization.** The
