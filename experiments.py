@@ -1,7 +1,7 @@
 """Sweep feature/probe recipes to improve per-class DSA subtype performance.
 
 Everything runs on frozen V-JEPA 2 features, so a whole grid of recipes is cheap. To make
-comparisons honest, every recipe is scored on the *same* patient-grouped folds
+comparisons fair, every recipe is scored on the *same* patient-grouped folds
 (StratifiedGroupKFold on Study_Key), and any fitted preprocessing (e.g. standardization)
 is fit on the training fold only.
 

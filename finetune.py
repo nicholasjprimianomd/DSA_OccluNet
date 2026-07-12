@@ -8,7 +8,7 @@ Design against overfitting on ~290 training samples:
   - patient-grouped k-fold with CLEAN held-out folds (no early-stopping leakage), and
     per-epoch train-vs-val curves so overfitting is visible at a glance
 
-Reported honestly: `best-val` (epoch picked per fold on the held-out fold — optimistic) AND
+Reported both ways: `best-val` (epoch picked per fold on the held-out fold — optimistic) AND
 `final-epoch` (no peeking). If final-epoch doesn't beat the frozen probe, fine-tuning isn't
 helping at this data scale.
 

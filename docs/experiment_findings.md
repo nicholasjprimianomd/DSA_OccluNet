@@ -177,7 +177,7 @@ The fixed route is still a direct three-class argmax: it takes the m2 and m3 pro
 columns from a direct temporal-DINO model and the other column from a direct fusion model.
 It is not the rejected MCA gate. However, because that column assignment was selected after
 looking at these results, **0.518 is hypothesis-generating, not a deployable estimate**. In
-the honest nested version, source selection is repeated inside each outer training fold and
+the leak-free nested version, source selection is repeated inside each outer training fold and
 the score contracts to 0.498.
 
 Input variants that did not work under the same fixed direct probe:
@@ -284,7 +284,7 @@ multilabel supervision is the right destination once more composite patients exi
    to the older static CNN, not to all medical pretraining.
 6. **Consider the task, not just the model.** Territory (MCA/ACA/PCA) is far more learnable
    (MCA F1 0.94). If m2-vs-m3 isn't clinically essential, reporting MCA/ACA/PCA — or m2 vs
-   m3 vs other with honest per-class numbers — is more trustworthy than forcing a
+   m3 vs other with transparent per-class numbers — is more trustworthy than forcing a
    distinction the imaging may not support from a single view.
 7. **Augmentation is not a clean breakthrough.** Flip improves V-JEPA alone but does not
    beat the existing early fusion. Temporal-change sampling is the only useful input change:

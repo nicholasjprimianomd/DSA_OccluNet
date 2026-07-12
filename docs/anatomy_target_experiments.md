@@ -106,7 +106,7 @@ M1 F1 0.027 and M4 F1 0.030 in the MCA-only experiment. No tested feature or doc
 probe recipe changes this conclusion. A trained M2/M3 model must therefore treat M1/M4 as
 unsupported scope; it cannot be trusted to identify and abstain on them automatically.
 
-### 5. Replacing `other_positive` with four or six explicit labels is honest but not useful yet
+### 5. Replacing `other_positive` with four or six explicit labels is defensible but not useful yet
 
 The four-class M2/M3/ACA/PCA model is dominated by M2 and PCA and almost never learns ACA.
 The six-class model similarly fails M1, M4, and ACA. These targets should be retained as
