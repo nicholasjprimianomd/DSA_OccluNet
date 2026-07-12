@@ -6,6 +6,7 @@ pydicom
 openpyxl
 matplotlib
 scikit-learn
+joblib
 
 # PyTorch: install the CUDA build that matches your GPU BEFORE the line below,
 # because the default PyPI wheel is CPU-only. For the RTX 5090 (Blackwell / sm_120)

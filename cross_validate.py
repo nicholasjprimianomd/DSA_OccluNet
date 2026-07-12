@@ -74,7 +74,9 @@ def extract_features(view, stage, records, device, amp, batch_size, num_workers)
 
 
 def load_or_extract(cache_dir, view, stage, records, device, amp, batch_size, num_workers):
-    cache = Path(cache_dir) / f"features_{view}_{stage}.npz"
+    norm_tag = "_norm" if BACKBONE.normalize_input else "_raw"
+    revision_tag = f"_{BACKBONE.revision[:8]}" if BACKBONE.revision else ""
+    cache = Path(cache_dir) / f"features_{view}_{stage}{norm_tag}{revision_tag}.npz"
     if cache.exists():
         data = np.load(cache, allow_pickle=True)
         if len(data["labels"]) == len(records):
@@ -188,6 +190,7 @@ def main() -> int:
     baseline = M.baseline_macro_f1(y, num_classes)
 
     config = {"view": args.view, "stage": args.stage, "backbone": BACKBONE.pretrained_name,
+              "backbone_revision": BACKBONE.revision, "normalize_input": BACKBONE.normalize_input,
               "frozen": True, "probe": "linear", "folds": n_splits,
               "n_samples": len(y), "n_groups": n_groups}
     report = M.format_cv_report(config, class_counts, per_fold, oof, label_names)

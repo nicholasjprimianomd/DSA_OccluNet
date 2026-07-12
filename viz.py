@@ -23,8 +23,11 @@ def _to_numpy(x: torch.Tensor) -> np.ndarray:
 
 
 def save_clip_montage(clip: torch.Tensor, title: str, path: Path, max_frames: int = 16) -> None:
-    """Grid of the frames actually fed to the backbone. `clip` is (T, 3, H, W) in [0, 1]."""
+    """Grid of frames fed to the backbone, robust to raw or channel-normalized inputs."""
     frames = _to_numpy(clip)[:, 0]  # channels are replicated grayscale; take one
+    display_min, display_max = np.quantile(frames, (0.01, 0.99))
+    if not display_max > display_min:
+        display_min, display_max = float(frames.min()), float(frames.max() + 1e-6)
     n = min(len(frames), max_frames)
     cols = int(np.ceil(np.sqrt(n)))
     rows = int(np.ceil(n / cols))
@@ -33,7 +36,7 @@ def save_clip_montage(clip: torch.Tensor, title: str, path: Path, max_frames: in
     for i in range(len(axes)):
         axes[i].axis("off")
         if i < n:
-            axes[i].imshow(frames[i], cmap="gray", vmin=0.0, vmax=1.0)
+            axes[i].imshow(frames[i], cmap="gray", vmin=display_min, vmax=display_max)
             axes[i].set_title(f"f{i}", fontsize=6)
     fig.suptitle(title, fontsize=9)
     fig.tight_layout()

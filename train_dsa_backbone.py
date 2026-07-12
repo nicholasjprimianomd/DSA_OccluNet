@@ -38,6 +38,11 @@ class BackboneSpec:
     input_key: str
     clip_length: int
     image_size: int
+    revision: str | None = None
+    normalize_input: bool = True
+    horizontal_flip: bool = False
+    image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
+    image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
 
 
 BACKBONE = BackboneSpec(
@@ -118,6 +123,12 @@ def preprocess_clip(sequence: torch.Tensor, spec: BackboneSpec) -> torch.Tensor:
         align_corners=False,
     )
     clip = clip.repeat(1, 3, 1, 1)
+    if spec.horizontal_flip:
+        clip = clip.flip(-1)
+    if spec.normalize_input:
+        mean = clip.new_tensor(spec.image_mean).view(1, 3, 1, 1)
+        std = clip.new_tensor(spec.image_std).view(1, 3, 1, 1)
+        clip = (clip - mean) / std
     return clip
 
 
@@ -193,7 +204,10 @@ class DsaVideoClassifier(nn.Module):
     def __init__(self, num_labels: int, freeze_backbone: bool = False, spec: BackboneSpec = BACKBONE) -> None:
         super().__init__()
         self.spec = spec
-        self.backbone = self._load_backbone(self.spec.pretrained_name)
+        if self.spec.revision is None:
+            self.backbone = self._load_backbone(self.spec.pretrained_name)
+        else:
+            self.backbone = self._load_backbone(self.spec.pretrained_name, revision=self.spec.revision)
         hidden_size = self._hidden_size(self.backbone)
         self.classifier = nn.Linear(hidden_size, num_labels)
 
@@ -202,7 +216,7 @@ class DsaVideoClassifier(nn.Module):
                 parameter.requires_grad = False
 
     @staticmethod
-    def _load_backbone(pretrained_name: str) -> nn.Module:
+    def _load_backbone(pretrained_name: str, revision: str | None = None) -> nn.Module:
         try:
             from transformers import AutoModel
         except ImportError as exc:  # pragma: no cover - depends on user environment
@@ -210,7 +224,7 @@ class DsaVideoClassifier(nn.Module):
                 "transformers is required for the training backbone. Install it with: pip install transformers"
             ) from exc
 
-        return AutoModel.from_pretrained(pretrained_name)
+        return AutoModel.from_pretrained(pretrained_name, revision=revision)
 
     @staticmethod
     def _hidden_size(backbone: nn.Module) -> int:
@@ -224,7 +238,10 @@ class DsaVideoClassifier(nn.Module):
     def forward(
         self, pixel_values: torch.Tensor, return_features: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        outputs = self.backbone(**{self.spec.input_key: pixel_values})
+        model_inputs = {self.spec.input_key: pixel_values}
+        if self.spec.name == "vjepa2":
+            model_inputs["skip_predictor"] = True
+        outputs = self.backbone(**model_inputs)
         hidden_state = outputs.last_hidden_state
         pooled = hidden_state.mean(dim=1)
         logits = self.classifier(pooled)
@@ -718,6 +735,8 @@ def main() -> int:
             {
                 "model_state_dict": model.state_dict(),
                 "backbone": BACKBONE.name,
+                "backbone_revision": BACKBONE.revision,
+                "normalize_input": BACKBONE.normalize_input,
                 "view": args.view,
                 "stage": args.stage,
                 "label_names": label_names,

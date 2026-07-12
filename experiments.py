@@ -17,6 +17,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import types
 from pathlib import Path
@@ -49,7 +50,14 @@ from train_dsa_backbone import (
 
 
 # ---- rich feature extraction (mean / max / std pooling over tokens) --------------------
-def make_spec(clip_length=None, backbone=None, image_size=None):
+def make_spec(
+    clip_length=None,
+    backbone=None,
+    image_size=None,
+    revision=None,
+    normalize_input=None,
+    horizontal_flip=None,
+):
     kw = {}
     if clip_length is not None:
         kw["clip_length"] = clip_length
@@ -57,6 +65,12 @@ def make_spec(clip_length=None, backbone=None, image_size=None):
         kw["pretrained_name"] = backbone
     if image_size is not None:
         kw["image_size"] = image_size
+    if revision is not None:
+        kw["revision"] = revision
+    if normalize_input is not None:
+        kw["normalize_input"] = normalize_input
+    if horizontal_flip is not None:
+        kw["horizontal_flip"] = horizontal_flip
     return dataclasses.replace(BACKBONE, **kw) if kw else BACKBONE
 
 
@@ -72,7 +86,10 @@ def extract_rich_features(view, stage, records, device, amp, batch_size, num_wor
         for i, batch in enumerate(loader, 1):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16,
                                 enabled=amp and device.type == "cuda"):
-                out = model.backbone(**{model.spec.input_key: batch["pixel_values"].to(device)})
+                model_inputs = {model.spec.input_key: batch["pixel_values"].to(device)}
+                if model.spec.name == "vjepa2":
+                    model_inputs["skip_predictor"] = True
+                out = model.backbone(**model_inputs)
             h = out.last_hidden_state.float()          # (B, tokens, hidden)
             means.append(h.mean(dim=1).cpu())
             maxes.append(h.amax(dim=1).cpu())
@@ -93,17 +110,76 @@ def extract_rich_features(view, stage, records, device, amp, batch_size, num_wor
     }
 
 
+def resolve_model_revision(spec) -> str:
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(spec.pretrained_name, revision=spec.revision)
+    return getattr(config, "_commit_hash", None) or spec.revision or "unknown"
+
+
+def extraction_signature(view, stage, records, amp, batch_size, device, spec, model_revision) -> dict[str, object]:
+    record_hasher = hashlib.sha256()
+    for record in records:
+        path = Path(record.dicom_path)
+        stat = path.stat()
+        identity = (
+            record.study_key,
+            record.accession,
+            record.run_column,
+            str(path.resolve()),
+            record.label_text,
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
+        record_hasher.update((json.dumps(identity, separators=(",", ":")) + "\n").encode())
+    return {
+        "view": view,
+        "stage": stage,
+        "record_sha256": record_hasher.hexdigest(),
+        "model": spec.pretrained_name,
+        "requested_revision": spec.revision,
+        "resolved_revision": model_revision,
+        "clip_length": spec.clip_length,
+        "image_size": spec.image_size,
+        "normalize_input": spec.normalize_input,
+        "horizontal_flip": spec.horizontal_flip,
+        "image_mean": list(spec.image_mean),
+        "image_std": list(spec.image_std),
+        "amp": amp,
+        "batch_size": batch_size,
+        "compute_dtype": "bfloat16" if amp and device.type == "cuda" else "float32",
+        "preprocessing": "dicom_rescale_monochrome_fix_percentile_1_99_square_resize_rgb_v2",
+    }
+
+
 def load_or_extract(cache, view, stage, records, device, amp, batch_size, num_workers, spec):
     tag = f"_f{spec.clip_length}_{spec.pretrained_name.split('/')[-1]}_{spec.image_size}"
+    if spec.normalize_input:
+        tag += "_norm"
+    if spec.horizontal_flip:
+        tag += "_hflip"
     path = Path(cache) / f"rich_{view}_{stage}{tag}.npz"
+    model_revision = resolve_model_revision(spec)
+    signature = extraction_signature(view, stage, records, amp, batch_size, device, spec, model_revision)
     if path.exists():
         d = np.load(path, allow_pickle=True)
-        if len(d["labels"]) == len(records):
+        saved_signature = json.loads(str(d["signature_json"].item())) if "signature_json" in d else None
+        if saved_signature == signature:
             print(f"Using cached rich features: {path}")
-            return {k: d[k] for k in ("mean", "max", "std", "labels", "groups")} | {"meta": list(d["meta"])}
+            return {k: d[k] for k in ("mean", "max", "std", "labels", "groups")} | {
+                "meta": list(d["meta"]), "model_revision": model_revision,
+            }
+        print(f"Ignoring stale/incompatible feature cache: {path}")
     data = extract_rich_features(view, stage, records, device, amp, batch_size, num_workers, spec)
+    data["model_revision"] = model_revision
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, **{k: v for k, v in data.items() if k != "meta"}, meta=np.array(data["meta"], dtype=object))
+    np.savez(
+        path,
+        **{k: v for k, v in data.items() if k not in ("meta", "model_revision")},
+        meta=np.array(data["meta"], dtype=object),
+        model_revision=np.asarray(model_revision),
+        signature_json=np.asarray(json.dumps(signature, sort_keys=True)),
+    )
     return data
 
 
@@ -128,7 +204,7 @@ def clf_factory(name):
         "logreg_C3":   lambda: LogisticRegression(max_iter=5000, C=3.0, class_weight=bal),
         "logreg_noW":  lambda: LogisticRegression(max_iter=5000, C=1.0),
         "svm_rbf":     lambda: SVC(kernel="rbf", C=3.0, gamma="scale", class_weight=bal),
-        "linsvm":      lambda: LinearSVC(C=0.5, class_weight=bal, max_iter=20000),
+        "linsvm":      lambda: LinearSVC(C=0.5, class_weight=bal, max_iter=20000, random_state=0),
         "mlp":         lambda: MLPClassifier(hidden_layer_sizes=(256,), alpha=1e-2, max_iter=1500,
                                              early_stopping=True, random_state=0),
     }[name]
@@ -183,7 +259,21 @@ def parse_args():
                    "every real frame; higher just interpolates.")
     p.add_argument("--backbone", default=None,
                    help="Override the V-JEPA 2 checkpoint, e.g. facebook/vjepa2-vitg-fpc64-384 for higher resolution.")
+    p.add_argument("--revision", default=None, help="Optional immutable Hugging Face checkpoint revision.")
     p.add_argument("--image-size", type=int, default=None, help="Override input resolution (match the backbone).")
+    p.add_argument(
+        "--normalize-input",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply the checkpoint's ImageNet channel normalization after DICOM windowing "
+             "(default: on; use --no-normalize-input only to reproduce historical runs).",
+    )
+    p.add_argument(
+        "--horizontal-flip",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Flip every frame in a clip left-to-right (default: off).",
+    )
     p.add_argument("--out", default="runs/exp")
     return p.parse_args()
 
@@ -201,7 +291,14 @@ def main() -> int:
     label_names = stage_label_names(args.stage)
     num_classes = len(label_names)
 
-    spec = make_spec(args.clip_length, args.backbone, args.image_size)
+    spec = make_spec(
+        args.clip_length,
+        args.backbone,
+        args.image_size,
+        args.revision,
+        args.normalize_input,
+        args.horizontal_flip,
+    )
     print(f"Extracting rich features for {len(records)} {args.view} runs "
           f"(frozen {spec.pretrained_name}, clip_length={spec.clip_length}, image_size={spec.image_size})…")
     data = load_or_extract(out / "cache", args.view, args.stage, records,
@@ -249,7 +346,16 @@ def main() -> int:
 
     # artifacts
     with (out / "sweep_results.json").open("w") as f:
-        json.dump({"view": args.view, "baseline_macro_f1": baseline, "class_counts": class_counts,
+        json.dump({"config": {"view": args.view, "stage": args.stage,
+                              "backbone": spec.pretrained_name, "model_revision": data["model_revision"],
+                              "image_size": spec.image_size,
+                              "clip_length": spec.clip_length, "normalize_input": spec.normalize_input,
+                              "horizontal_flip": spec.horizontal_flip,
+                              "folds": n_splits, "seed": args.seed, "amp": args.amp,
+                              "batch_size": args.batch_size,
+                              "compute_dtype": "bfloat16" if args.amp and device.type == "cuda" else "float32",
+                              "n_samples": len(y), "n_groups": len(set(groups))},
+                   "view": args.view, "baseline_macro_f1": baseline, "class_counts": class_counts,
                    "results": [{k: v for k, v in r.items() if k not in ("metrics", "oof")} for r in results]},
                   f, indent=2, default=float)
     labels = [r["recipe"] for r in results]

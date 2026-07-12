@@ -31,7 +31,9 @@ from train_dsa_backbone import (
 
 
 def extract_tokens(view, stage, records, device, amp, batch_size, num_workers, cache):
-    path = Path(cache) / f"tokens_{view}_{stage}.npz"
+    norm_tag = "_norm" if BACKBONE.normalize_input else "_raw"
+    revision_tag = f"_{BACKBONE.revision[:8]}" if BACKBONE.revision else ""
+    path = Path(cache) / f"tokens_{view}_{stage}{norm_tag}{revision_tag}.npz"
     if path.exists():
         d = np.load(path, allow_pickle=True)
         if len(d["labels"]) == len(records):
@@ -45,7 +47,10 @@ def extract_tokens(view, stage, records, device, amp, batch_size, num_workers, c
     with torch.no_grad():
         for i, batch in enumerate(loader, 1):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp and device.type == "cuda"):
-                out = model.backbone(**{model.spec.input_key: batch["pixel_values"].to(device)})
+                model_inputs = {model.spec.input_key: batch["pixel_values"].to(device)}
+                if model.spec.name == "vjepa2":
+                    model_inputs["skip_predictor"] = True
+                out = model.backbone(**model_inputs)
             toks.append(out.last_hidden_state.half().cpu())
             labels.append(batch["labels"])
             for m in batch["metadata"]:
@@ -164,7 +169,8 @@ def main() -> int:
 
     m = M.compute_metrics(y, oof, k)
     base = M.baseline_macro_f1(y, k)
-    cfg = {"view": args.view, "stage": args.stage, "backbone": BACKBONE.pretrained_name, "frozen": True,
+    cfg = {"view": args.view, "stage": args.stage, "backbone": BACKBONE.pretrained_name,
+           "backbone_revision": BACKBONE.revision, "normalize_input": BACKBONE.normalize_input, "frozen": True,
            "probe": "attention-pooling", "folds": n_splits, "n_samples": len(y), "n_groups": len(set(groups))}
     report = M.format_cv_report(cfg, counts, per_fold, m, label_names)
     report += f"\n\nMajority baseline macro-F1={base:.3f}  |  prior best linear probe ≈0.46 AP / 0.45 Lat"

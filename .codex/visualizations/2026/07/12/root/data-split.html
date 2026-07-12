@@ -1,0 +1,112 @@
+<section id="dsa-split-viz" aria-label="Patient-grouped cross-validation split">
+  <div class="viz-row" aria-label="Choose a held-out fold">
+    <button class="btn btn-secondary" type="button" aria-pressed="true" data-fold="0">Fold 1</button>
+    <button class="btn btn-secondary" type="button" aria-pressed="false" data-fold="1">Fold 2</button>
+    <button class="btn btn-secondary" type="button" aria-pressed="false" data-fold="2">Fold 3</button>
+    <button class="btn btn-secondary" type="button" aria-pressed="false" data-fold="3">Fold 4</button>
+    <button class="btn btn-secondary" type="button" aria-pressed="false" data-fold="4">Fold 5</button>
+  </div>
+  <svg viewBox="0 0 720 330" role="img" aria-labelledby="split-title split-desc" style="display:block;width:100%;height:auto;margin-top:12px">
+    <title id="split-title">Five patient-grouped held-out folds</title>
+    <desc id="split-desc">Each bar is the held-out portion of one StratifiedGroupKFold split. Segment heights show run counts for m2, m3, and other positive.</desc>
+    <text x="18" y="20" fill="var(--foreground)" style="font-size:15px;font-weight:500">Held-out runs in each patient-grouped fold</text>
+    <text x="18" y="40" fill="var(--muted-foreground)" style="font-size:12px">Each column becomes the test fold once; all other columns are training data.</text>
+    <g id="bars" transform="translate(42,62)"></g>
+    <g transform="translate(42,285)">
+      <rect width="12" height="12" rx="2" fill="var(--viz-series-1)"></rect>
+      <text x="18" y="10" fill="var(--foreground)" style="font-size:12px">m2</text>
+      <rect x="72" width="12" height="12" rx="2" fill="var(--viz-series-2)"></rect>
+      <text x="90" y="10" fill="var(--foreground)" style="font-size:12px">m3</text>
+      <rect x="144" width="12" height="12" rx="2" fill="var(--viz-series-3)"></rect>
+      <text x="162" y="10" fill="var(--foreground)" style="font-size:12px">other</text>
+    </g>
+  </svg>
+  <div id="split-detail" class="text-small" aria-live="polite"></div>
+</section>
+<script>
+(() => {
+  const root = document.getElementById('dsa-split-viz');
+  const folds = [
+    { runs: 73, patients: 37, trainRuns: 293, trainPatients: 147, multiRun: 24, counts: [48, 13, 12] },
+    { runs: 73, patients: 38, trainRuns: 293, trainPatients: 146, multiRun: 24, counts: [47, 14, 12] },
+    { runs: 75, patients: 36, trainRuns: 291, trainPatients: 148, multiRun: 26, counts: [49, 14, 12] },
+    { runs: 72, patients: 38, trainRuns: 294, trainPatients: 146, multiRun: 24, counts: [48, 13, 11] },
+    { runs: 73, patients: 35, trainRuns: 293, trainPatients: 149, multiRun: 26, counts: [48, 13, 12] }
+  ];
+  const colors = ['var(--viz-series-1)', 'var(--viz-series-2)', 'var(--viz-series-3)'];
+  const labels = ['m2', 'm3', 'other'];
+  const bars = root.querySelector('#bars');
+  const detail = root.querySelector('#split-detail');
+  let selected = 0;
+
+  folds.forEach((fold, index) => {
+    const x = index * 132;
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    group.setAttribute('data-fold-group', index);
+    group.setAttribute('transform', `translate(${x},0)`);
+    group.style.cursor = 'pointer';
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', '31');
+    label.setAttribute('y', '0');
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('fill', 'var(--foreground)');
+    label.setAttribute('style', 'font-size:13px;font-weight:500');
+    label.textContent = `Fold ${index + 1}`;
+    group.appendChild(label);
+    let y = 186;
+    fold.counts.forEach((count, classIndex) => {
+      const height = count * 2.35;
+      y -= height;
+      const segment = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      segment.setAttribute('x', '5');
+      segment.setAttribute('y', String(y));
+      segment.setAttribute('width', '52');
+      segment.setAttribute('height', String(height));
+      segment.setAttribute('rx', '3');
+      segment.setAttribute('fill', colors[classIndex]);
+      segment.setAttribute('data-segment', classIndex);
+      group.appendChild(segment);
+      const value = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      value.setAttribute('x', '31');
+      value.setAttribute('y', String(y + height / 2 + 4));
+      value.setAttribute('text-anchor', 'middle');
+      value.setAttribute('fill', 'var(--foreground)');
+      value.setAttribute('style', 'font-size:12px');
+      value.textContent = `${labels[classIndex]} ${count}`;
+      group.appendChild(value);
+    });
+    const footer = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    footer.setAttribute('x', '31');
+    footer.setAttribute('y', '205');
+    footer.setAttribute('text-anchor', 'middle');
+    footer.setAttribute('fill', 'var(--muted-foreground)');
+    footer.setAttribute('style', 'font-size:11px');
+    footer.textContent = `${fold.runs} runs · ${fold.patients} patients`;
+    group.appendChild(footer);
+    group.addEventListener('click', () => setSelected(index));
+    bars.appendChild(group);
+  });
+
+  function setSelected(index) {
+    selected = index;
+    root.querySelectorAll('[data-fold]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(Number(button.dataset.fold) === selected));
+    });
+    root.querySelectorAll('[data-fold-group]').forEach((group) => {
+      const active = Number(group.dataset.foldGroup) === selected;
+      group.style.opacity = active ? '1' : '0.42';
+      group.querySelectorAll('rect').forEach((mark) => {
+        mark.setAttribute('stroke', active ? 'var(--foreground)' : 'none');
+        mark.setAttribute('stroke-width', active ? '1.25' : '0');
+      });
+    });
+    const fold = folds[selected];
+    detail.textContent = `Fold ${selected + 1} holds out ${fold.runs} runs from ${fold.patients} patients (${fold.multiRun} with multiple runs); train uses ${fold.trainRuns} runs from ${fold.trainPatients} patients.`;
+  }
+
+  root.querySelectorAll('[data-fold]').forEach((button) => {
+    button.addEventListener('click', () => setSelected(Number(button.dataset.fold)));
+  });
+  setSelected(selected);
+})();
+</script>
