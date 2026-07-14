@@ -209,6 +209,14 @@ def dicom_frame_times_ms(path: str | Path | None, n_frames: int) -> torch.Tensor
             vector = getattr(dataset, "FrameTimeVector", None)
             if vector is not None:
                 intervals = torch.as_tensor([float(value) for value in vector], dtype=torch.float32)
+                # Some XA exports store T+1 entries: a leading zero followed by one
+                # increment per frame.  T frames need only the leading zero plus T-1
+                # increments, so discard the trailing extra interval.
+                if (
+                    len(intervals) == n_frames + 1
+                    and abs(float(intervals[0])) <= 1e-6
+                ):
+                    intervals = intervals[:n_frames]
                 if len(intervals) == n_frames:
                     times = intervals.cumsum(dim=0)
                     return times - times[0]

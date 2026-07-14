@@ -20,11 +20,13 @@ import argparse
 import hashlib
 import json
 import types
+import warnings
 from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
@@ -47,6 +49,11 @@ from train_dsa_backbone import (
     select_device,
     stage_label_names,
 )
+
+
+LINEAR_SVM_DUAL = False
+LINEAR_SVM_MAX_ITER = 20_000
+LINEAR_SVM_TOL = 1e-4
 
 
 # ---- rich feature extraction (mean / max / std pooling over tokens) --------------------
@@ -204,7 +211,14 @@ def clf_factory(name):
         "logreg_C3":   lambda: LogisticRegression(max_iter=5000, C=3.0, class_weight=bal),
         "logreg_noW":  lambda: LogisticRegression(max_iter=5000, C=1.0),
         "svm_rbf":     lambda: SVC(kernel="rbf", C=3.0, gamma="scale", class_weight=bal),
-        "linsvm":      lambda: LinearSVC(C=0.5, class_weight=bal, max_iter=20000, random_state=0),
+        "linsvm":      lambda: LinearSVC(
+            C=0.5,
+            class_weight=bal,
+            dual=LINEAR_SVM_DUAL,
+            max_iter=LINEAR_SVM_MAX_ITER,
+            random_state=0,
+            tol=LINEAR_SVM_TOL,
+        ),
         "mlp":         lambda: MLPClassifier(hidden_layer_sizes=(256,), alpha=1e-2, max_iter=1500,
                                              early_stopping=True, random_state=0),
     }[name]
@@ -229,16 +243,56 @@ RECIPES = [
 
 def evaluate_recipe(X, y, folds, num_classes, prep, clf):
     oof = np.full(len(y), -1, dtype=int)
-    for tr, va in folds:
+    for fold_index, (tr, va) in enumerate(folds):
         pipe = make_pipeline(prep_step(prep), clf_factory(clf)())
-        pipe.fit(X[tr], y[tr])
+        with warnings.catch_warnings():
+            if clf == "linsvm":
+                warnings.simplefilter("error", ConvergenceWarning)
+            try:
+                pipe.fit(X[tr], y[tr])
+            except ConvergenceWarning as error:
+                raise RuntimeError(
+                    f"LinearSVC did not converge in fold {fold_index} after "
+                    f"{LINEAR_SVM_MAX_ITER:,} iterations."
+                ) from error
         oof[va] = pipe.predict(X[va])
+    if np.any(oof < 0):
+        raise RuntimeError("Cross-validation did not produce exactly one prediction per sample.")
     return oof, M.compute_metrics(y, oof, num_classes)
 
 
 def make_folds(y, groups, n_splits, seed):
+    if n_splits < 2:
+        raise ValueError(f"Grouped cross-validation requires at least 2 folds, got {n_splits}.")
     skf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    return list(skf.split(np.zeros(len(y)), y, groups))
+    folds = list(skf.split(np.zeros(len(y)), y, groups))
+    validation_counts = np.zeros(len(y), dtype=int)
+    expected_classes = set(np.unique(y))
+    for fold_index, (train, valid) in enumerate(folds):
+        overlap = set(groups[train]).intersection(groups[valid])
+        if overlap:
+            raise RuntimeError(
+                f"Grouped fold {fold_index} leaks {len(overlap)} group(s) across train/validation."
+            )
+        if set(np.unique(y[train])) != expected_classes:
+            raise RuntimeError(f"Grouped fold {fold_index} training data is missing a class.")
+        validation_counts[valid] += 1
+    if not np.all(validation_counts == 1):
+        raise RuntimeError("Grouped folds must hold out every sample exactly once.")
+    return folds
+
+
+def grouped_fold_count(y, groups, requested, num_classes):
+    groups_per_class = [
+        len(set(groups[y == class_index])) for class_index in range(num_classes)
+    ]
+    fold_count = min(requested, len(set(groups)), *groups_per_class)
+    if fold_count < 2:
+        raise ValueError(
+            "Grouped cross-validation needs at least two distinct groups in every class; "
+            f"groups per class were {groups_per_class}."
+        )
+    return fold_count
 
 
 def parse_args():
@@ -306,7 +360,7 @@ def main() -> int:
     y, groups = data["labels"], data["groups"]
     class_counts = {label_names[c]: int((y == c).sum()) for c in range(num_classes)}
 
-    n_splits = min(args.folds, len(set(groups)), int(np.min(np.bincount(y, minlength=num_classes))))
+    n_splits = grouped_fold_count(y, groups, args.folds, num_classes)
     folds = make_folds(y, groups, n_splits, args.seed)
     baseline = M.baseline_macro_f1(y, num_classes)
 
