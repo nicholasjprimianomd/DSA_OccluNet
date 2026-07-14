@@ -12,7 +12,7 @@ script replaces it with explicit tasks that have a defensible interpretation:
 * ``anatomy_6class_strict``: M1/M2/M3/M4/ACA/PCA, excluding composite labels.
 
 Every result is repeated patient-grouped out-of-fold evaluation.  Feature
-standardization and the balanced logistic probe are fit inside each fold.
+preprocessing and the selected probe are fit inside each fold.
 Optionally, the script then fits full-data probe artifacts for later inference;
 those artifacts are not additional held-out evidence.
 """
@@ -22,12 +22,14 @@ import argparse
 import hashlib
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score
 from sklearn.pipeline import make_pipeline
@@ -36,7 +38,12 @@ from sklearn.svm import LinearSVC
 
 import metrics as M
 from compare_feature_caches import canonical_metadata, file_sha256, parse_feature, parse_seeds
-from experiments import make_folds
+from experiments import (
+    LINEAR_SVM_DUAL,
+    LINEAR_SVM_MAX_ITER,
+    LINEAR_SVM_TOL,
+    make_folds,
+)
 
 
 RECIPE_NAMES = ("std_logreg_c3", "std_logreg_c1", "std_linsvm", "l2_logreg")
@@ -61,6 +68,26 @@ def parse_fusion(value: str) -> tuple[str, tuple[str, ...]]:
     return name, sources
 
 
+def parse_name_list(value: str) -> tuple[str, ...]:
+    names = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not names:
+        raise argparse.ArgumentTypeError("Expected at least one comma-separated name.")
+    if len(set(names)) != len(names):
+        raise argparse.ArgumentTypeError("Names must be unique.")
+    return names
+
+
+def select_named(available, requested: tuple[str, ...] | None, kind: str):
+    available_by_name = {item.name if hasattr(item, "name") else item: item for item in available}
+    if requested is None:
+        return list(available)
+    unknown = [name for name in requested if name not in available_by_name]
+    if unknown:
+        choices = ", ".join(available_by_name)
+        raise ValueError(f"Unknown {kind}: {', '.join(unknown)}. Choices: {choices}")
+    return [available_by_name[name] for name in requested]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--feature", action="append", type=parse_feature, required=True, metavar="NAME=PATH")
@@ -68,6 +95,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("0:20"))
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument(
+        "--tasks",
+        type=parse_name_list,
+        default=None,
+        help="Optional comma-separated task subset; by default evaluate every task.",
+    )
+    parser.add_argument(
+        "--feature-sources",
+        type=parse_name_list,
+        default=None,
+        help="Optional comma-separated base/fusion subset; by default evaluate every source.",
+    )
     parser.add_argument(
         "--recipes",
         default=",".join(RECIPE_NAMES),
@@ -278,7 +317,14 @@ def new_probe(recipe: str):
     if recipe == "std_linsvm":
         return make_pipeline(
             StandardScaler(),
-            LinearSVC(C=0.5, class_weight="balanced", max_iter=20000, random_state=0),
+            LinearSVC(
+                C=0.5,
+                class_weight="balanced",
+                dual=LINEAR_SVM_DUAL,
+                max_iter=LINEAR_SVM_MAX_ITER,
+                random_state=0,
+                tol=LINEAR_SVM_TOL,
+            ),
         )
     if recipe == "l2_logreg":
         return make_pipeline(
@@ -286,6 +332,23 @@ def new_probe(recipe: str):
             LogisticRegression(max_iter=5000, C=1.0, class_weight="balanced"),
         )
     raise ValueError(recipe)
+
+
+def fit_probe(probe, features: np.ndarray, labels: np.ndarray, context: str) -> int:
+    """Fit one fold and fail instead of silently accepting an unconverged estimator."""
+    estimator = probe.steps[-1][1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ConvergenceWarning)
+        try:
+            probe.fit(features, labels)
+        except ConvergenceWarning as error:
+            limit = getattr(estimator, "max_iter", "the configured limit")
+            raise RuntimeError(
+                f"{type(estimator).__name__} did not converge for {context} after "
+                f"{limit} iterations."
+            ) from error
+    iterations = np.asarray(getattr(estimator, "n_iter_", 0), dtype=int)
+    return int(iterations.max()) if iterations.size else 0
 
 
 def prediction_scores(probe, features: np.ndarray, num_classes: int) -> np.ndarray:
@@ -335,15 +398,34 @@ def evaluate_one(
     folds = make_folds(y, task_groups, fold_count, seed)
     predictions = np.full(len(y), -1, dtype=int)
     probabilities = np.zeros((len(y), len(task.label_names)), dtype=float)
-    for train, valid in folds:
+    fit_iterations = []
+    for fold_index, (train, valid) in enumerate(folds):
         probe = new_probe(recipe)
-        probe.fit(x[train], y[train])
+        fit_iterations.append(
+            fit_probe(
+                probe,
+                x[train],
+                y[train],
+                context=(
+                    f"task={task.name}, feature={feature_name}, recipe={recipe}, "
+                    f"seed={seed}, fold={fold_index}"
+                ),
+            )
+        )
         predictions[valid] = probe.predict(x[valid])
         probabilities[valid] = prediction_scores(probe, x[valid], len(task.label_names))
+    if np.any(predictions < 0):
+        raise RuntimeError(
+            f"Incomplete out-of-fold predictions for task={task.name}, feature={feature_name}, "
+            f"recipe={recipe}, seed={seed}."
+        )
     metrics = M.compute_metrics(y, predictions, len(task.label_names))
     return task.name, feature_name, recipe, {
         "seed": seed,
         "folds": fold_count,
+        "fit_iterations": fit_iterations,
+        "max_fit_iterations": max(fit_iterations, default=0),
+        "convergence_verified": True,
         "macro_f1": metrics["macro_f1"],
         "balanced_accuracy": metrics["balanced_accuracy"],
         "accuracy": metrics["accuracy"],
@@ -395,6 +477,10 @@ def summarize(tasks, feature_names, recipes, per_seed):
                         "per_class_recall_std": recall_std,
                         "per_class_f1_mean": f1_mean,
                         "per_class_f1_std": f1_std,
+                        "max_fit_iterations": max(row["max_fit_iterations"] for row in rows),
+                        "convergence_verified": all(
+                            row["convergence_verified"] for row in rows
+                        ),
                     }
                 )
         summaries[task.name] = sorted(task_rows, key=lambda row: row["macro_f1_mean"], reverse=True)
@@ -418,7 +504,12 @@ def train_final_models(
         feature_name = task_summaries[0]["feature"]
         recipe = task_summaries[0]["recipe"]
         probe = new_probe(recipe)
-        probe.fit(features[feature_name][task.indices], task.labels)
+        fit_iterations = fit_probe(
+            probe,
+            features[feature_name][task.indices],
+            task.labels,
+            context=f"final task={task_name}, feature={feature_name}, recipe={recipe}",
+        )
         path = model_dir / f"{task_name}__{feature_name}__{recipe}.joblib"
         artifact = {
             "pipeline": probe,
@@ -428,6 +519,8 @@ def train_final_models(
             "feature_source": feature_name,
             "recipe": recipe,
             "feature_dimension": int(features[feature_name].shape[1]),
+            "fit_iterations": fit_iterations,
+            "convergence_verified": True,
             "training_indices": task.indices,
             "training_groups": groups[task.indices],
             "training_metadata_identity": [metadata_identity[index] for index in task.indices],
@@ -439,29 +532,32 @@ def train_final_models(
             "sha256": file_sha256(path),
             "feature_source": feature_name,
             "recipe": recipe,
+            "fit_iterations": fit_iterations,
+            "convergence_verified": True,
             "labels": list(task.label_names),
             "n_samples": len(task.labels),
             "n_groups": len(set(groups[task.indices])),
         }
 
-    cascade = {
-        "territory_model": artifacts["territory_strict"],
-        "mca_segment_model": artifacts["clean_m2_m3"],
-        "policy": {
-            "aca": "return ACA",
-            "pca": "return PCA",
-            "mca": "run clean M2-vs-M3 probe only when the case is known to be within its supported M2/M3 scope",
-            "m1_m4": "unsupported/abstain; the available data do not justify an M1/M4 detector",
-        },
-        "warning": "Component scores are not calibrated for clinical decision-making.",
-    }
-    cascade_path = model_dir / "territory_then_m2_m3_cascade.json"
-    with cascade_path.open("w") as handle:
-        json.dump(cascade, handle, indent=2)
-    artifacts["territory_then_m2_m3_cascade"] = {
-        "path": str(cascade_path),
-        "sha256": file_sha256(cascade_path),
-    }
+    if {"territory_strict", "clean_m2_m3"}.issubset(artifacts):
+        cascade = {
+            "territory_model": artifacts["territory_strict"],
+            "mca_segment_model": artifacts["clean_m2_m3"],
+            "policy": {
+                "aca": "return ACA",
+                "pca": "return PCA",
+                "mca": "run clean M2-vs-M3 probe only when the case is known to be within its supported M2/M3 scope",
+                "m1_m4": "unsupported/abstain; the available data do not justify an M1/M4 detector",
+            },
+            "warning": "Component scores are not calibrated for clinical decision-making.",
+        }
+        cascade_path = model_dir / "territory_then_m2_m3_cascade.json"
+        with cascade_path.open("w") as handle:
+            json.dump(cascade, handle, indent=2)
+        artifacts["territory_then_m2_m3_cascade"] = {
+            "path": str(cascade_path),
+            "sha256": file_sha256(cascade_path),
+        }
     return artifacts
 
 
@@ -491,8 +587,11 @@ def main() -> int:
             raise ValueError(f"Fusion {fusion_name} references unknown sources: {missing}")
         features[fusion_name] = np.concatenate([features[name] for name in source_names], axis=1)
 
+    selected_feature_names = select_named(features, args.feature_sources, "feature source")
+    features = {name: features[name] for name in selected_feature_names}
+
     label_texts = [identity[4] for identity in reference_identity]
-    tasks = build_tasks(label_texts)
+    tasks = select_named(build_tasks(label_texts), args.tasks, "task")
     per_seed = {
         task.name: {
             feature_name: {recipe: [] for recipe in recipes}
@@ -566,7 +665,16 @@ def main() -> int:
             "group": "Study_Key",
             "classifier": "predeclared fold-local probe recipes; see recipes field",
             "recipes": recipes,
-            "representation": "mean pooled frozen features",
+            "linear_svm_max_iterations": LINEAR_SVM_MAX_ITER,
+            "linear_svm_dual": LINEAR_SVM_DUAL,
+            "linear_svm_tolerance": LINEAR_SVM_TOL,
+            "convergence_policy": "fail the run on any scikit-learn ConvergenceWarning",
+            "representation": (
+                "feature matrix supplied by each cache; construction and provenance are "
+                "recorded in the source signature"
+            ),
+            "evaluated_tasks": [task.name for task in tasks],
+            "evaluated_feature_sources": list(features),
             "n_source_runs": len(reference_groups),
             "n_source_groups": len(set(reference_groups)),
             "script_sha256": script_hash,
@@ -589,7 +697,9 @@ def main() -> int:
         json.dump(output, handle, indent=2, default=float)
     print(f"\nWrote anatomy-task results to {args.out}")
     if artifacts:
-        print(f"Wrote {len(artifacts) - 1} trained probes and one cascade manifest to {output_dir / 'models'}")
+        probe_count = sum(name != "territory_then_m2_m3_cascade" for name in artifacts)
+        cascade_note = " and one cascade manifest" if "territory_then_m2_m3_cascade" in artifacts else ""
+        print(f"Wrote {probe_count} trained probes{cascade_note} to {output_dir / 'models'}")
     return 0
 
 

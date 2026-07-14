@@ -1,0 +1,243 @@
+{
+  "best_recipe": "std / logreg-bal",
+  "data": {
+    "baseline_macro_f1": 0.26402640264026406,
+    "class_counts": {
+      "m2": 240,
+      "m3": 67,
+      "other_positive": 59
+    },
+    "class_names": [
+      "m2",
+      "m3",
+      "other_positive"
+    ],
+    "n_groups": 184,
+    "n_samples": 366
+  },
+  "protocol": {
+    "actual_folds": 5,
+    "architecture": "ResNet50",
+    "convergence_policy": "fail on any scikit-learn ConvergenceWarning",
+    "current_model_provenance": null,
+    "feature_cache": {
+      "legacy_unsigned": true,
+      "path": "runs/radimagenet_validation/cache/radimagenet_ResNet50_AP_positive_subtype.npz",
+      "sha256": "18d43d191c53d73727b68828963a0f2c2c9241cc18447b222c7f167b09e3533c",
+      "signature": null,
+      "validation": "finite features, dimensions, labels, groups, ordered sample identity"
+    },
+    "group": "Study_Key",
+    "linear_svm_dual": false,
+    "linear_svm_max_iterations": 20000,
+    "linear_svm_tolerance": 0.0001,
+    "n_frames": 16,
+    "provenance_note": "Historical unsigned cache reuse was explicitly allowed; original extraction provenance is unavailable.",
+    "requested_folds": 5,
+    "script_sha256": "7d1889e912ba082d3a56abb0f0707936d342cd77ec1a50282c4e2a7bb8d012cf",
+    "seed": 0,
+    "stage": "positive_subtype",
+    "view": "AP"
+  },
+  "public_export": {
+    "note": "The full raw result remains local because the GitHub repository is public.",
+    "removed": [
+      "accession and Study_Key audit examples",
+      "sample identities",
+      "per-case OOF predictions and scores",
+      "local absolute path prefixes"
+    ],
+    "source_filename": "results.json",
+    "source_sha256": "6372d716d619eeaea5ea6bfc3d58a9a6a65ac66fe7d307bbc518691761e7f4d3"
+  },
+  "recipes": {
+    "l2  / logreg-bal": {
+      "metrics": {
+        "accuracy": 0.27595628415300544,
+        "balanced_accuracy": 0.28152493183798527,
+        "confusion": [
+          [
+            65,
+            58,
+            117
+          ],
+          [
+            21,
+            18,
+            28
+          ],
+          [
+            23,
+            18,
+            18
+          ]
+        ],
+        "macro_f1": 0.25275249443680986,
+        "per_class": {
+          "f1": [
+            0.37249283667621774,
+            0.2236024844720497,
+            0.16216216216216217
+          ],
+          "precision": [
+            0.5963302752293578,
+            0.19148936170212766,
+            0.11042944785276074
+          ],
+          "recall": [
+            0.2708333333333333,
+            0.26865671641791045,
+            0.3050847457627119
+          ],
+          "support": [
+            240,
+            67,
+            59
+          ]
+        },
+        "weighted_f1": 0.3113311880587081
+      }
+    },
+    "raw / logreg-noW": {
+      "metrics": {
+        "accuracy": 0.6530054644808743,
+        "balanced_accuracy": 0.33194444444444443,
+        "confusion": [
+          [
+            239,
+            1,
+            0
+          ],
+          [
+            67,
+            0,
+            0
+          ],
+          [
+            59,
+            0,
+            0
+          ]
+        ],
+        "macro_f1": 0.2633608815426997,
+        "per_class": {
+          "f1": [
+            0.7900826446280992,
+            0.0,
+            0.0
+          ],
+          "precision": [
+            0.6547945205479452,
+            0.0,
+            0.0
+          ],
+          "recall": [
+            0.9958333333333333,
+            0.0,
+            0.0
+          ],
+          "support": [
+            240,
+            67,
+            59
+          ]
+        },
+        "weighted_f1": 0.5180869800839994
+      }
+    },
+    "std / linsvm-bal": {
+      "metrics": {
+        "accuracy": 0.4890710382513661,
+        "balanced_accuracy": 0.38985826517131855,
+        "confusion": [
+          [
+            143,
+            60,
+            37
+          ],
+          [
+            45,
+            18,
+            4
+          ],
+          [
+            29,
+            12,
+            18
+          ]
+        ],
+        "macro_f1": 0.3867348925826089,
+        "per_class": {
+          "f1": [
+            0.6258205689277899,
+            0.22929936305732485,
+            0.3050847457627119
+          ],
+          "precision": [
+            0.6589861751152074,
+            0.2,
+            0.3050847457627119
+          ],
+          "recall": [
+            0.5958333333333333,
+            0.26865671641791045,
+            0.3050847457627119
+          ],
+          "support": [
+            240,
+            67,
+            59
+          ]
+        },
+        "weighted_f1": 0.5015300378893726
+      }
+    },
+    "std / logreg-bal": {
+      "metrics": {
+        "accuracy": 0.5273224043715847,
+        "balanced_accuracy": 0.40571647412654244,
+        "confusion": [
+          [
+            158,
+            50,
+            32
+          ],
+          [
+            46,
+            17,
+            4
+          ],
+          [
+            31,
+            10,
+            18
+          ]
+        ],
+        "macro_f1": 0.4066527799341027,
+        "per_class": {
+          "f1": [
+            0.6652631578947369,
+            0.2361111111111111,
+            0.3185840707964602
+          ],
+          "precision": [
+            0.6723404255319149,
+            0.22077922077922077,
+            0.3333333333333333
+          ],
+          "recall": [
+            0.6583333333333333,
+            0.2537313432835821,
+            0.3050847457627119
+          ],
+          "support": [
+            240,
+            67,
+            59
+          ]
+        },
+        "weighted_f1": 0.5308171106999248
+      }
+    }
+  }
+}

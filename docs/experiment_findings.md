@@ -1,9 +1,11 @@
 # Experiments: improving per-class DSA subtype performance
 
-All results are **patient-grouped 5-fold cross-validation** (StratifiedGroupKFold on
-`Study_Key`) and out-of-fold. The AP comparison set has 366 runs from 184 groups
-(m2=240, m3=67, other_positive=59). The initial experiments used one split seed; the
-new backbone/resolution comparison repeats the same fixed recipe over 20 paired split
+The original positive-subtype backbone results are **patient-grouped 5-fold
+cross-validation** (`StratifiedGroupKFold` on `Study_Key`) and out-of-fold. The anatomy
+tasks use the same grouping, with the fold count capped by rare-class patient support; the
+two M1-containing tasks therefore use three folds. The AP comparison set has 366 runs from
+184 groups (m2=240, m3=67, other_positive=59). The initial experiments used one split seed;
+the new backbone/resolution comparison repeats the same fixed recipe over 20 paired split
 seeds. Tooling: [experiments.py](../experiments.py) (V-JEPA 2 recipe sweep),
 [image_backbone_probe.py](../image_backbone_probe.py) (per-frame image backbones),
 [compare_feature_caches.py](../compare_feature_caches.py) (repeated paired comparison),
@@ -14,7 +16,7 @@ seeds. Tooling: [experiments.py](../experiments.py) (V-JEPA 2 recipe sweep),
 [attn_probe.py](../attn_probe.py) (attentive pooling), and
 [cross_validate.py](../cross_validate.py) (baseline probe).
 
-## Headline (updated 2026-07-11)
+## Headline (updated 2026-07-13)
 
 The old best was unnormalized V-JEPA 2 ViT-g/384 at 0.476. Applying the checkpoint's
 documented channel normalization raises its best seed-0 sweep result to **0.486**. A
@@ -22,12 +24,13 @@ genuinely different model, DINOv2-L/252, is effectively tied and is stronger on 
 
 | Frozen AP backbone | Resolution | Seed-0 best-of-sweep | Fixed LinearSVC, 20 seeds | Fixed logreg C3, 20 seeds |
 |---|---:|---:|---:|---:|
-| V-JEPA 2 ViT-L (normalized) | 256 | 0.479 | 0.438 ± 0.018 | 0.442 ± 0.023 |
+| V-JEPA 2 ViT-L (normalized) | 256 | 0.479 | 0.438 ± 0.019 | 0.442 ± 0.023 |
 | V-JEPA 2 ViT-g (normalized) | 256 | 0.480 | 0.446 ± 0.025 | 0.450 ± 0.024 |
 | **V-JEPA 2 ViT-g (normalized)** | **384** | **0.486** | 0.460 ± 0.021 | **0.474 ± 0.019** |
 | **DINOv2-L, per-frame** | **252** | 0.477 | **0.477 ± 0.025** | 0.473 ± 0.025 |
 | DINOv2-L, per-frame | 518 | 0.443 | 0.438 ± 0.025 | 0.456 ± 0.028 |
 | RAD-DINO, per-frame | 518 | 0.478 | 0.457 ± 0.019 | 0.462 ± 0.020 |
+| RadImageNet ResNet50, per-frame | 224 | 0.407 | 0.375 ± 0.018 | 0.377 ± 0.019 |
 
 There is no single dominant configuration. V-JEPA 2 ViT-g/384 has the best seed-0
 and repeated-logistic score, while DINOv2-L/252 has the best repeated LinearSVC score
@@ -85,9 +88,24 @@ gain.
 
 **7. Medical backbone: RadImageNet** ([radimagenet_probe.py](../radimagenet_probe.py)) — the
 first medical comparison used a RadImageNet ResNet50 per frame with temporal mean pooling.
-AP best macro-F1 was **0.407**, below the original V-JEPA 2 result. This rules out that
-specific static CNN, not medical pretraining as a category; RAD-DINO below is substantially
-better. No usable public angiography-video checkpoint was available for these runs.
+Its historical **0.407** was a seed-0 best-of-sweep result. Under the same fixed logistic-C3
+recipe and identical 20 paired grouped splits, RadImageNet scores **0.377 ± 0.019**
+(class F1 0.662/0.203/0.266), while RAD-DINO scores **0.462 ± 0.020**
+(0.705/0.269/0.413). The paired improvement is +0.0850 ± 0.0319, median +0.0896,
+range +0.0306 to +0.1357; RAD-DINO wins all 20 split seeds. The fixed LinearSVC comparison
+agrees: 0.375 ± 0.018 versus 0.457 ± 0.019, again 20/20 wins. This rules out that specific
+static CNN, not medical pretraining as a category. No usable public angiography-video
+checkpoint was available for these runs.
+
+The reused historical RadImageNet cache predates extraction signatures, so its original
+checkpoint and extraction provenance cannot be reconstructed. It nevertheless passed exact
+validation for all 366 rows: finite 2,048-value features, labels, groups, and ordered
+`(Study_Key, accession, view, run_column)` identity. Legacy reuse now requires an explicit
+flag. New extractions pin revision `14460ee4c1276f6925611a63aa9a54a05d39eae0` and record
+the checkpoint SHA-256.
+
+The structured legacy audit, including out-of-fold predictions and the cache hash, is in
+`runs/radimagenet_validation/results.json`.
 
 **8. Label-scheme diagnostics** — same features, different targets:
 
@@ -139,16 +157,22 @@ conclusion is that **the older medical CNN was a dead end; medical pretraining i
 not**.
 
 **12. Repeated paired folds** ([compare_feature_caches.py](../compare_feature_caches.py)) —
-all six corrected feature sets were evaluated on the same 20 `StratifiedGroupKFold`
+all seven feature sets were evaluated on the same 20 `StratifiedGroupKFold`
 seeds with one fixed representation (mean), fold-local standardization, and the same
 classifier. This removes the most obvious best-of-13 recipe selection bias.
 
 - LinearSVC favors DINOv2-L/252 over V-JEPA 2 ViT-g/384 by +0.017 on average (15/20 seeds).
 - Logistic C3 makes them indistinguishable: 0.473 vs 0.474 (DINO wins 10/20 seeds).
+- All six alternatives beat RadImageNet on every logistic-C3 split; five did so on every
+  LinearSVC split and V-JEPA ViT-g/256 did so on 19/20.
 - Repeated folds measure split sensitivity, not independent-dataset generalization; the
   final model still needs a locked patient-level test cohort or external validation.
 - The current subset has one accession per MRN, so `Study_Key` is effectively patient-level;
   future repeat admissions must be grouped by a stable patient identifier rather than accession.
+
+Full paired outputs are in
+`runs/radiology_svm_comparison/repeated_linsvm_7backbones_20seeds.json` and
+`runs/radiology_svm_comparison/repeated_logregc3_7backbones_20seeds.json`.
 
 **13. Direct m2 vs m3 vs other augmentation and fusion**
 ([three_class_augmentation_experiments.py](../three_class_augmentation_experiments.py)) —
@@ -215,23 +239,35 @@ labels rather than treating `other_positive` as a surrogate non-MCA class.
 evaluated across 20 patient-grouped split seeds using the best documented frozen features
 and convergent probe recipes.
 
-| Redesigned task | Counts | Best macro-F1 | Critical class result |
-|---|---|---:|---|
-| **Clean M2 vs M3** | 237 / 65 | **0.581 ± 0.025** | M3 F1 **0.332** |
-| **M2/M3/PCA** | 237 / 65 / 29 | **0.619 ± 0.026** | M2 0.807, M3 0.332, PCA 0.718 |
-| Territory MCA/ACA/PCA | 319 / 15 / 29 | 0.594 ± 0.019 | ACA F1 **0.050** |
-| M2/M3/ACA/PCA | 237 / 65 / 15 / 29 | 0.463 ± 0.016 | ACA F1 **0.073** |
-| M2/M3/other-MCA | 237 / 65 / 15 | 0.384 ± 0.027 | M1/M4-group F1 **0.071** |
-| MCA M1/M2/M3/M4 | 5 / 237 / 65 / 10 | 0.282 ± 0.031 | M1 0.027, M4 0.030 |
-| M1/M2/M3/M4/ACA/PCA | 5 / 237 / 65 / 10 / 15 / 29 | 0.301 ± 0.027 | M4 0.000, ACA 0.021 |
+| Redesigned task | Counts | Selected probe | Macro-F1 | Critical class result |
+|---|---|---|---:|---|
+| **Clean M2 vs M3** | 237 / 65 | temporal DINO / SVM | **0.584 ± 0.025** | M3 F1 **0.352** |
+| **M2/M3/PCA** | 237 / 65 / 29 | temporal DINO / SVM | **0.645 ± 0.025** | M2 0.808, M3 0.357, PCA 0.769 |
+| Territory MCA/ACA/PCA | 319 / 15 / 29 | V-JEPA+DINO / logreg | 0.594 ± 0.019 | ACA F1 **0.050** |
+| M2/M3/ACA/PCA | 237 / 65 / 15 / 29 | temporal DINO / logreg | 0.463 ± 0.016 | ACA F1 **0.073** |
+| M2/M3/other-MCA | 237 / 65 / 15 | temporal DINO / SVM | 0.411 ± 0.027 | M1/M4-group F1 **0.121** |
+| MCA M1/M2/M3/M4 | 5 / 237 / 65 / 10 | temporal DINO / logreg | 0.282 ± 0.031 | M1 0.027, M4 0.030 |
+| M1/M2/M3/M4/ACA/PCA | 5 / 237 / 65 / 10 / 15 / 29 | V-JEPA / logreg | 0.301 ± 0.027 | M4 0.000, ACA 0.021 |
 
 This resolves the target-design question. **Clean M2-vs-M3 is the defensible binary task,
 and strict M2/M3/PCA is the best coherent three-class task tested.** Adding PCA leaves m3
-F1 unchanged at 0.332 and yields PCA F1 0.718. The higher three-class macro-F1 is not a
-like-for-like improvement over binary because PCA is easier, but it shows that PCA is a
-learnable replacement for the catch-all. A territory-first hierarchy remains non-operational
-with 15 ACA cases; M1/M4 also cannot form a reliable explicit or abstention class. Changing
-regularization and L2 normalization does not rescue these sparse classes.
+F1 in the 0.33–0.36 range and yields PCA F1 as high as 0.769. The higher three-class
+macro-F1 is not a like-for-like improvement over binary because PCA is easier, but it shows
+that PCA is a learnable replacement for the catch-all. A territory-first hierarchy remains
+non-operational with 15 ACA cases; M1/M4 also cannot form a reliable explicit or abstention
+class.
+
+The hardened primal LinearSVC completed every base-feature fold without a convergence
+warning. On clean M2/M3 it is effectively tied with logistic regression (paired delta
++0.0036 ± 0.0186, 12/20 wins). On strict M2/M3/PCA, temporal DINO + SVM improves over the
+previous task leader by +0.0258 ± 0.0280 (16/20 wins), with class-F1 changes of +0.001 M2,
++0.025 M3, and +0.052 PCA. This is a DINO/task-specific gain, not a universal SVM result;
+ACA remains near zero and M1/M4 remain unsupported.
+
+A targeted SVM fusion run also completed all 800 high-dimensional fold fits without a
+warning. The best uniform+temporal-DINO fusion scores 0.577 on clean M2/M3 and 0.630 on
+M2/M3/PCA, below temporal DINO alone at 0.584 and 0.645. Feature concatenation is not the
+source of the gain (paired deltas −0.0070 and −0.0149; 7/20 and 4/20 wins).
 
 Full-data probe artifacts were saved after CV for reproducibility. They are not additional
 held-out evidence. The recommended research artifacts are
@@ -261,6 +297,70 @@ patient groups, so it is not a new headline result or evidence that composite pr
 mapping is generally safe. Strict paired fusion remains the defensible primary result;
 multilabel supervision is the right destination once more composite patients exist.
 
+**16. Mask-free handcrafted radiomics is a useful control, not a replacement for DINO**
+([full report](anatomy_target_experiments.md)) — no radiomics script was recoverable from
+Claude's July 12 sessions or Git recovery points, and the source data contain no ROI masks.
+The new extractor therefore makes a limited whole-field, non-IBSI sensitivity baseline from
+temporal mean, standard-deviation, and P90−P10 maps with fixed first-order and GLCM features.
+It corrects the common leading-zero `T+1` DICOM timing export and resamples every cine to 32
+normalized-time samples before projection. It explicitly does not claim to be conventional
+masked PyRadiomics.
+
+On the same 20 patient-grouped split seeds, the best handcrafted result is 0.502 ± 0.022
+macro-F1 for clean M2/M3 and 0.484 ± 0.024 for strict M2/M3/PCA, versus temporal-DINO SVM
+at 0.584 and 0.645. Central-field descriptors outperform full-field descriptors, confirming
+sensitivity to skull/border/collimation content. LinearSVC is not universally better:
+logistic C=1 improves three-class spatial radiomics by +0.0207 ± 0.0237 (18/20 split-seed
+wins), mainly through PCA.
+
+Central spatial radiomics concatenated to temporal DINO is neutral/worse for clean M2/M3
+(0.570; paired delta −0.0147, 4/20 wins) and reaches 0.655 ± 0.019 for M2/M3/PCA (paired
+delta +0.0107 ± 0.0273, 15/20 wins). The added class-F1 is almost entirely PCA (+.039), not
+M3. Since the fusion variants reuse the same CV groups for comparison, this is an
+exploratory complement signal rather than a new selected model. ACA, M1, and M4 remain
+unlearnable with these descriptors.
+
+**17. Adding lateral radiomics and nested ensembles does not beat paired temporal DINO in
+a stable way** ([full report](anatomy_target_experiments.md)) — the same timing-aware
+central spatial extractor was run on 328 lateral runs, then AP and lateral radiomics were
+aligned to the strict 267-pair/151-patient cohort. Every threshold and blend weight was
+selected with grouped inner cross-fitting inside each of the 20×5 outer training folds.
+
+The numerical winner is a DINO-only hierarchy: a paired AP+lateral PCA-vs-MCA gate followed
+by an AP-DINO M2/M3 expert. It reaches 0.654 ± 0.025 macro-F1 with class F1
+0.788/0.329/0.844. Direct paired temporal-DINO logistic regression is 0.651 ± 0.020 with
+0.800/0.304/0.850. The hierarchy's paired change is only +0.0023 ± 0.0299 and it wins 12/20
+split seeds, so this is a class tradeoff—not a reliable general improvement. It raises M3
+F1 by .024 while lowering M2 by .012 and PCA by .006.
+
+Radiomics-inclusive alternatives are all lower: 0.647 for the nested DINO+radiomics PCA
+gate, 0.638 for a nested late probability blend, and 0.626 for early concatenation. Adding
+radiomics to the otherwise identical DINO hierarchy changes macro-F1 by −.006 (4/20 wins);
+the late and early variants trail direct paired DINO by −.013 and −.025. Although inner
+tuning chose a nonzero radiomics gate weight in 85/100 outer folds, this did not generalize
+to the held-out outer patients. The rare PCA stratum has only 11 patient groups, making the
+extra selection degree of freedom prone to overfit. Gate thresholds also range from 0.3 to
+0.7, so no single deployment threshold is supported.
+
+**18. Unpaired studies extend coverage but do not improve paired accuracy**
+([full report](anatomy_target_experiments.md)) — a missing-view hierarchy was evaluated on
+344 strict run identities from 171 patient groups: 267 paired, 57 AP-only, and 20
+lateral-only. Union folds are created before the availability subsets; each view expert is
+trained only on available training-fold views, and pair weights/thresholds are selected by
+grouped inner OOF prediction.
+
+The all-available hierarchy reaches 0.651 ± 0.027 macro-F1 over the complete union, with
+M2/M3/PCA F1 0.790/0.347/0.815. It beats the direct missing-view logistic ensemble by
++0.0383 ± 0.0362 with 17/20 split-seed wins, mostly through M3 (+.084 F1) and PCA
+(+.033). This is a useful deployable pattern: paired cases blend AP/lateral PCA gates and
+use the AP M2/M3 expert, while single-view cases fall back to their view-specific hierarchy.
+
+Unpaired training does not improve the held-out paired subset. Against the same viewwise
+architecture trained only on pairs, its change is +0.0003 ± 0.0277 (12/20 wins); against
+the stronger paired concatenated hierarchy it is −0.0017 ± 0.0281 (9/20). The value of the
+77 extra cases is therefore coverage, not a higher paired headline. The lateral-only score
+of 0.733 is highly uncertain because that subset has only 20 cases and one PCA case.
+
 ## Conclusions
 
 1. **Ship correct checkpoint normalization and fold-local feature standardization.** The
@@ -280,8 +380,9 @@ multilabel supervision is the right destination once more composite patients exi
    the highest-value next steps. Revisit fine-tuning only after the dataset is materially
    larger; the current partial fine-tune overfits.
 5. **The medical-backbone conclusion needs nuance.** RAD-DINO is competitive and much better
-   than RadImageNet ResNet50, but it is not the overall winner. The negative result applies
-   to the older static CNN, not to all medical pretraining.
+   than RadImageNet ResNet50: the fair logistic comparison is 0.462 versus 0.377, with
+   RAD-DINO winning all 20 paired splits. It is not the overall winner. The negative result
+   applies to the older static CNN, not to all medical pretraining.
 6. **Consider the task, not just the model.** Territory (MCA/ACA/PCA) is far more learnable
    (MCA F1 0.94). If m2-vs-m3 isn't clinically essential, reporting MCA/ACA/PCA — or m2 vs
    m3 vs other with transparent per-class numbers — is more trustworthy than forcing a
@@ -291,14 +392,31 @@ multilabel supervision is the right destination once more composite patients exi
    it lifts DINO m3 F1 from 0.301 to 0.306 and macro-F1 by 0.014. Nested class routing may add
    another 0.007 over fusion, but its 0.030 split-to-split SD is too large to call decisive.
    Do not report the post-hoc 0.518 route as final performance without a locked patient cohort.
-8. **Retire `other_positive` for new models.** Use clean M2-vs-M3 (0.581 ± 0.025) for the
-   binary scientific question or strict M2/M3/PCA (0.619 ± 0.026) when a coherent third
-   class is required. The latter preserves m3 F1 and learns PCA at F1 0.718. ACA, M1, M4,
-   and composites are outside its supported scope and must not be silently folded into it.
+8. **Retire `other_positive` for new models.** Use clean M2-vs-M3 for the binary scientific
+   question; the hardened SVM candidate scores 0.584 ± 0.025 but is effectively tied with
+   logistic regression. For a coherent third class, temporal-DINO + SVM reaches
+   0.645 ± 0.025 on strict M2/M3/PCA and is the clearest head-level improvement. It remains
+   a CV-selected candidate, not a replacement for the saved logistic model until tested on
+   a locked patient cohort. ACA, M1, M4, and composites are outside its supported scope.
 9. **Use lateral as a matched second view, not pooled augmentation.** On the identical
-   concordant paired cohort, AP+lateral fusion reaches 0.646 versus 0.572 AP-only and 0.591
-   lateral-only. A half-weight composite sensitivity reaches 0.653, but those composites
-   come from only two patients and should remain exploratory.
+   concordant paired cohort, the earlier same-head comparison gives 0.651 for direct
+   temporal AP+lateral fusion versus 0.576 for matched AP-only logistic regression, mainly
+   through PCA. The new SVM controls show that raw concatenation is not universally useful:
+   AP-only is 0.615 while AP+lateral is 0.569. The best hierarchy uses both views only for
+   the PCA gate and AP for M2/M3, reaching 0.654, but its +0.002 change over direct fusion
+   is not stable enough to promote before locked testing. Do not compare the AP-only
+   full-cohort SVM's 0.645 directly with matched-view scores; the cohorts differ.
+10. **Keep handcrafted radiomics as a transparent sensitivity/control representation.**
+    Without masks or patient-space calibration it is not standard ROI radiomics, and its
+    best standalone result is materially below DINO. Adding matched lateral radiomics does
+    not rescue it: nested gate, late-blend, and early-fusion variants all trail direct paired
+    DINO. Do not promote the earlier AP-only 0.655 fusion before locked testing.
+11. **Use the missing-view hierarchy only when deployment must cover incomplete studies.**
+    It scores 0.651 across all 344 strict identities and materially outperforms direct
+    missing-view logistic experts, especially on M3. The unpaired cases do not improve the
+    paired subset, so they should not be presented as a paired-performance augmentation.
+    Keep paired-only models for paired-only deployment and validate the missing-view gate
+    threshold on a locked patient cohort.
 
 ## Reproduce
 
@@ -306,11 +424,19 @@ Checkpoint revisions used: V-JEPA ViT-L/256 `b3c1679b7c34d3255ef3547f27c7b226aef
 ViT-g/256 `875c192b7b704b87d1e1d99345769632dd5f739a`, ViT-g/384
 `12ca91694b230e0d4b5b0078af6f4ae1d51e933d`, DINOv2-L
 `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c`, and RAD-DINO
-`110cbc18d5133582e320b43d53bf5c44e410c936`.
+`110cbc18d5133582e320b43d53bf5c44e410c936`. The pinned RadImageNet control for new
+extractions is `14460ee4c1276f6925611a63aa9a54a05d39eae0`; it does not identify the
+checkpoint that produced the unsigned historical cache.
 
 Recorded environment: Python 3.14.6, NumPy 2.5.1, pandas 3.0.3, pydicom 3.0.2,
 matplotlib 3.11.0, scikit-learn 1.9.0, joblib 1.5.3, PyTorch 2.11.0+cu128,
 torchvision 0.26.0+cu128, Transformers 5.13.1, and huggingface-hub 1.23.0.
+
+Exact reproduction of the reported RadImageNet rows requires the untracked historical
+artifact at `runs/ap_radimagenet/cache/radimagenet_ResNet50_AP_positive_subtype.npz`,
+SHA-256 `18d43d191c53d73727b68828963a0f2c2c9241cc18447b222c7f167b09e3533c`.
+The legacy-audit command below fails if that exact-path prerequisite is absent; a new signed
+extraction is a separate experiment.
 
 ```bash
 export DSA_BASE_DIR=~/M2_M3_data
@@ -339,18 +465,26 @@ export DSA_BASE_DIR=~/M2_M3_data
 .venv/bin/python image_backbone_probe.py --view AP --model microsoft/rad-dino \
   --revision 110cbc18d5133582e320b43d53bf5c44e410c936 \
   --image-size 518 --frame-batch-size 8 --device cuda --amp --out runs/ap_raddino518
+# Reuse and audit the exact historical unsigned cache used for the reported table.
+.venv/bin/python radimagenet_probe.py --view AP --arch ResNet50 \
+  --allow-legacy-cache --out runs/ap_radimagenet
 
-# Repeated fixed-recipe comparison. For the second table also change --classifier to
-# logreg_C3 and --out to repeated_logregc3_norm_20seeds.json.
+# For a newly signed extraction, omit --allow-legacy-cache and use a separate output such
+# as runs/ap_radimagenet_pinned. That is a new experiment and its scores may differ.
+
+# Repeated fixed-recipe comparison. The first cache is the paired-delta reference.
+# For the logistic table, change --classifier to logreg_C3 and the output filename.
 .venv/bin/python compare_feature_caches.py \
+  --feature radimagenet_r50=runs/ap_radimagenet/cache/radimagenet_ResNet50_AP_positive_subtype.npz \
+  --feature rad_dino_518=runs/ap_raddino518/cache/image_microsoft-rad-dino_518_16_AP_positive_subtype.npz \
   --feature vjepa_l256_norm=runs/ap_exp_vitl256_norm/cache/rich_AP_positive_subtype_f16_vjepa2-vitl-fpc64-256_256_norm.npz \
   --feature vjepa_g256_norm=runs/ap_exp_vitg256_norm/cache/rich_AP_positive_subtype_f16_vjepa2-vitg-fpc64-256_256_norm.npz \
   --feature vjepa_g384_norm=runs/ap_exp_vitg384_norm/cache/rich_AP_positive_subtype_f16_vjepa2-vitg-fpc64-384_384_norm.npz \
   --feature dinov2_l252=runs/ap_dinov2l252/cache/image_facebook-dinov2-large_252_16_AP_positive_subtype.npz \
   --feature dinov2_l518=runs/ap_dinov2l518/cache/image_facebook-dinov2-large_518_16_AP_positive_subtype.npz \
-  --feature rad_dino_518=runs/ap_raddino518/cache/image_microsoft-rad-dino_518_16_AP_positive_subtype.npz \
   --seeds 0:20 --representation mean --preprocessing std --classifier linsvm --jobs 8 \
-  --out runs/backbone_comparison/repeated_linsvm_norm_20seeds.json
+  --allow-legacy-metadata \
+  --out runs/radiology_svm_comparison/repeated_linsvm_7backbones_20seeds.json
 
 # Direct three-class augmentation features.
 for variant in hflip border90 multicrop top_contrast temporal_rgb phase_rgb; do
