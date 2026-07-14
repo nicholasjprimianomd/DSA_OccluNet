@@ -1,8 +1,12 @@
-"""Test paired and genuinely unpaired studies with a missing-view DINO hierarchy.
+"""Test paired and genuinely unpaired studies with a missing-view feature hierarchy.
 
 Each strict run identity contributes exactly one evaluation row. Concordant AP/lateral
-pairs use both views; AP-only and lateral-only identities use their available view. Models,
-preprocessing, gate/blend selection, and every split remain patient-grouped.
+pairs use both views; AP-only and lateral-only identities use their available view. The
+inputs are frozen, per-run AP and lateral feature caches and may come from any backbone or
+video representation that follows the project cache schema. The historical ``--ap-temporal``
+and ``--lat-temporal`` option names are retained for command compatibility; the hierarchy
+does not assume DINO features or temporal-mean pooling. Models, preprocessing, gate/blend
+selection, and every split remain patient-grouped.
 """
 from __future__ import annotations
 
@@ -73,6 +77,8 @@ PAIRED_ONLY_METHODS = {
 
 @dataclass(frozen=True)
 class UnionCohort:
+    """Aligned frozen run features with explicit AP/lateral availability."""
+
     ap: np.ndarray
     lateral: np.ndarray
     ap_available: np.ndarray
@@ -86,8 +92,24 @@ class UnionCohort:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ap-temporal", type=Path, required=True)
-    parser.add_argument("--lat-temporal", type=Path, required=True)
+    parser.add_argument(
+        "--ap-temporal",
+        type=Path,
+        required=True,
+        help=(
+            "AP frozen-feature cache. The option name is retained for compatibility; "
+            "features may come from any backbone or video representation."
+        ),
+    )
+    parser.add_argument(
+        "--lat-temporal",
+        type=Path,
+        required=True,
+        help=(
+            "Lateral frozen-feature cache. The option name is retained for compatibility; "
+            "features may come from any backbone or video representation."
+        ),
+    )
     parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("0:20"))
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--inner-folds", type=int, default=3)
@@ -101,6 +123,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_union_cohort(ap_cache: dict[str, object], lat_cache: dict[str, object]) -> UnionCohort:
+    """Align arbitrary AP/lateral run-feature caches into the missing-view cohort.
+
+    Each cache supplies its frozen representation through the standard ``mean`` array. The
+    current union matrix stores the two views at one common feature width and therefore
+    rejects mismatched widths; no assumption is made about how a backbone produced those
+    vectors.
+    """
+
     ap_map = unique_pair_map(ap_cache, "AP")
     lat_map = unique_pair_map(lat_cache, "lateral")
     rows: list[tuple[tuple[str, str, int], int | None, int | None, int, str]] = []
@@ -214,6 +244,8 @@ def build_union_cohort(ap_cache: dict[str, object], lat_cache: dict[str, object]
 
 
 def pair_features(cohort: UnionCohort, indices: np.ndarray) -> np.ndarray:
+    """Concatenate the two available frozen view vectors for genuinely paired cases."""
+
     return np.concatenate((cohort.ap[indices], cohort.lateral[indices]), axis=1)
 
 

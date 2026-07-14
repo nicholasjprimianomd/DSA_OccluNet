@@ -361,6 +361,29 @@ the stronger paired concatenated hierarchy it is −0.0017 ± 0.0281 (9/20). The
 77 extra cases is therefore coverage, not a higher paired headline. The lateral-only score
 of 0.733 is highly uncertain because that subset has only 20 cases and one PCA case.
 
+**19. A video-native encoder preserves the hierarchy gain but does not replace DINO**
+([full report](anatomy_target_experiments.md),
+[matched public comparison](../results/public/video_vs_frame_missing_view_comparison_20seeds.md))
+— the same 20-seed nested procedure was rerun with frozen V-JEPA 2 ViT-g/384. V-JEPA
+receives 16 ordered frames jointly, creates three-dimensional tubelets, and performs
+spatiotemporal attention before final token pooling. This differs materially from the
+reference DINO model, which independently encodes selected frames and then averages their
+embeddings.
+
+The cache-level audit confirmed the exact same 344 ordered identities, 171 patient groups,
+labels, and AP/lateral availability. V-JEPA scores 0.633 ± 0.019 on the full union with
+M2/M3/PCA F1 0.755/0.256/0.887, versus DINO's 0.651 ± 0.027 and
+0.790/0.347/0.815. The matched V-JEPA-minus-DINO macro-F1 difference is
+−0.0178 ± 0.0345; V-JEPA wins 5/20 seeds. It improves PCA by .072 F1 but loses .035 on
+M2 and .091 on M3. AP-only macro-F1 improves from 0.625 to 0.645, whereas the 20-case
+lateral-only subset drops sharply because V-JEPA misses its sole PCA case.
+
+This does not invalidate the missing-view architecture. Within V-JEPA, the hierarchy beats
+the direct three-class missing-view control by +0.0322 ± 0.0274 with 18/20 wins. Keep the
+hierarchy, but keep DINO as the primary frozen backbone. The comparison also changes frame
+selection and resolution, so it establishes the practical best-model choice on this cohort;
+it does not isolate temporal attention as the only causal difference.
+
 ## Conclusions
 
 1. **Ship correct checkpoint normalization and fold-local feature standardization.** The
@@ -417,6 +440,12 @@ of 0.733 is highly uncertain because that subset has only 20 cases and one PCA c
     paired subset, so they should not be presented as a paired-performance augmentation.
     Keep paired-only models for paired-only deployment and validate the missing-view gate
     threshold on a locked patient cohort.
+12. **Do not replace the DINO hierarchy with the tested video-native V-JEPA model.** Joint
+    video encoding is architecturally cleaner than pre-encoder frame averaging, and V-JEPA
+    raises PCA F1, but its lower M2/M3 performance produces a 0.018 mean macro-F1 deficit and
+    15/20 matched-seed losses. Preserve V-JEPA as a PCA-oriented challenger or future hybrid
+    component; any hybrid must be selected in nested training folds and validated on a locked
+    cohort before promotion.
 
 ## Reproduce
 

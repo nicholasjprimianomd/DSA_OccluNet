@@ -445,6 +445,62 @@ all-available hierarchy when missing-view coverage is required; keep the simpler
 model for paired-only deployment. Complete OOF predictions and selections are stored in
 `runs/missing_view_hierarchy/results_nested_20seeds.json`. No full-data artifact was fit.
 
+## Video-native missing-view comparison
+
+The identical missing-view procedure was repeated with a model that receives the ordered
+run as video rather than encoding frames independently. The reference DINOv2-L/252 model
+selects 16 high-temporal-change frames, applies a two-dimensional image encoder to each
+frame, and averages the resulting frame embeddings. The comparator is frozen V-JEPA 2
+ViT-g/384 at revision `12ca91694b230e0d4b5b0078af6f4ae1d51e933d`. It receives 16 ordered,
+uniformly sampled frames together, forms two-frame three-dimensional tubelets, and applies
+joint spatiotemporal self-attention before its final tokens are averaged into the 1,408-value
+probe vector. The run is therefore not collapsed before video encoding, although the frozen
+encoder output must still become a fixed-length vector for the same linear hierarchy.
+
+Fresh AP and lateral caches used checkpoint normalization, within-run 1st/99th-percentile
+scaling, 384-pixel inputs, bfloat16 inference, and no fine-tuning. Their record-order hashes
+match the DINO caches exactly. Reconstructing both unions gave identical ordered identities,
+labels, patient groups, and availability arrays: 344 cases from 171 groups, split into 267
+paired, 57 AP-only, and 20 lateral-only cases. The same deterministic split routine, seed
+sequence, requested outer/inner fold counts, methods, grids, and fold-local preprocessing
+were then reused without modification.
+
+The table consistently reports the union-inner-OOF-tuned primary hierarchy
+(`augmented_hierarchy_union_tuned`) across availability scopes. The earlier DINO paired row
+of 0.648 is the separately reported paired-inner-OOF-tuned variant.
+
+| Backbone / union-tuned primary evaluation scope | Cases | Macro-F1 | Mean class F1 (M2 / M3 / PCA) |
+|---|---:|---:|---:|
+| **DINOv2-L frame ensemble / full union** | **344** | **0.651 ± 0.027** | **.790** / **.347** / .815 |
+| V-JEPA 2 ViT-g video / full union | 344 | 0.633 ± 0.019 | .755 / .256 / **.887** |
+| DINOv2-L frame ensemble / paired | 267 | 0.647 ± 0.030 | **.795** / **.344** / .802 |
+| V-JEPA 2 ViT-g video / paired | 267 | 0.634 ± 0.024 | .752 / .250 / **.900** |
+| DINOv2-L frame ensemble / AP-only | 57 | 0.625 ± 0.037 | .785 / **.262** / .828 |
+| V-JEPA 2 ViT-g video / AP-only | 57 | **0.645 ± 0.044** | **.808** / .201 / **.927** |
+| DINOv2-L frame ensemble / lateral-only | 20 | **0.733 ± 0.060** | **.709** / **.489** / **1.000** |
+| V-JEPA 2 ViT-g video / lateral-only | 20 | 0.334 ± 0.063 | .629 / .374 / .000 |
+
+On the primary union endpoint, V-JEPA minus DINO is −0.0178 ± 0.0345 macro-F1 and the
+video model wins 5 of 20 matched split seeds. Its mean class-F1 changes are -.035 M2, -.091
+M3, and +.072 PCA. The result is a class tradeoff, not a uniform failure: V-JEPA improves
+PCA and the AP-only aggregate, but it loses the clinically difficult M3 signal and misses
+the sole lateral-only PCA case. That 20-case lateral-only stratum is too small for a stable
+backbone conclusion, especially because it contains just one PCA case.
+
+The hierarchy itself remains useful with video features. V-JEPA's direct missing-view
+logistic control scores 0.601 ± 0.021, while its hierarchy scores 0.633 ± 0.019, a
+paired-seed gain of +0.0322 ± 0.0274 with 18/20 wins. The conclusion is therefore to keep
+the hierarchy but retain DINO as the primary frozen backbone. V-JEPA is a plausible
+PCA-oriented or future hybrid component, not the replacement model on these data. Because
+the two backbones also differ in frame selection and resolution, this is a comparison of
+the strongest saved DINO configuration with the video-native configuration, not a pure
+causal test of temporal attention alone. No full-data artifact was fit.
+
+The complete local V-JEPA OOF result is
+`runs/video_missing_view_hierarchy/results_vjepa2_vitg384_nested_20seeds.json` (SHA-256
+`f733b726a4e3ab5df1b8037066ca7e11f525a802763377e25f6825ab2117426e`). Identifier-free
+manifests and the matched comparison are in `results/public/`.
+
 ## Trained artifacts
 
 The canonical artifact paths are listed in `runs/anatomy_tasks/results.json`. The recommended
@@ -550,6 +606,51 @@ The paired+unpaired missing-view experiment is reproduced with:
   --seeds 0:20 --folds 5 --inner-folds 3 --jobs 8 \
   --out runs/missing_view_hierarchy/results_nested_20seeds.json
 ```
+
+The video-native comparison uses fresh signed caches and the same hierarchy command:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+.venv/bin/python experiments.py --view AP --stage positive_subtype --device cuda --amp \
+  --backbone facebook/vjepa2-vitg-fpc64-384 \
+  --revision 12ca91694b230e0d4b5b0078af6f4ae1d51e933d \
+  --image-size 384 --clip-length 16 --normalize-input --batch-size 2 --num-workers 0 \
+  --out runs/ap_vjepa2_vitg384_video_signed
+
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+.venv/bin/python experiments.py --view Lateral --stage positive_subtype --device cuda --amp \
+  --backbone facebook/vjepa2-vitg-fpc64-384 \
+  --revision 12ca91694b230e0d4b5b0078af6f4ae1d51e933d \
+  --image-size 384 --clip-length 16 --normalize-input --batch-size 2 --num-workers 0 \
+  --out runs/lat_vjepa2_vitg384_video_signed
+
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+.venv/bin/python missing_view_hierarchy_experiments.py \
+  --ap-temporal runs/ap_vjepa2_vitg384_video_signed/cache/rich_AP_positive_subtype_f16_vjepa2-vitg-fpc64-384_384_norm.npz \
+  --lat-temporal runs/lat_vjepa2_vitg384_video_signed/cache/rich_Lateral_positive_subtype_f16_vjepa2-vitg-fpc64-384_384_norm.npz \
+  --seeds 0:20 --folds 5 --inner-folds 3 --jobs 8 \
+  --out runs/video_missing_view_hierarchy/results_vjepa2_vitg384_nested_20seeds.json
+
+.venv/bin/python compare_missing_view_results.py \
+  --reference-results runs/missing_view_hierarchy/results_nested_20seeds.json \
+  --candidate-results runs/video_missing_view_hierarchy/results_vjepa2_vitg384_nested_20seeds.json \
+  --reference-name DINOv2-L/252-frame-ensemble \
+  --candidate-name V-JEPA2-ViT-g/384-video \
+  --reference-ap-cache runs/ap_dinov2l252_variants/cache/image_facebook-dinov2-large_252_16_AP_positive_subtype_top_contrast.npz \
+  --reference-lateral-cache runs/lat_dinov2l252/cache/image_facebook-dinov2-large_252_16_Lateral_positive_subtype_top_contrast.npz \
+  --candidate-ap-cache runs/ap_vjepa2_vitg384_video_signed/cache/rich_AP_positive_subtype_f16_vjepa2-vitg-fpc64-384_384_norm.npz \
+  --candidate-lateral-cache runs/lat_vjepa2_vitg384_video_signed/cache/rich_Lateral_positive_subtype_f16_vjepa2-vitg-fpc64-384_384_norm.npz \
+  --json-out results/public/video_vs_frame_missing_view_comparison_20seeds.json \
+  --markdown-out results/public/video_vs_frame_missing_view_comparison_20seeds.md
+
+.venv/bin/python scripts/export_public_experiment_result.py \
+  runs/video_missing_view_hierarchy/results_vjepa2_vitg384_nested_20seeds.json \
+  results/public/video_vjepa2_missing_view_20seeds.json
+```
+
+The signed AP and lateral V-JEPA cache SHA-256 values are respectively
+`dc9344830bea50eb608b162519c51b6ee7e51c6db32b5e4805291f56f8dabc8c` and
+`33f62546e32905a9cd43a02b0d4095324bd3457cc6853ff05fa809362df96fe7`.
 
 The AP+lateral follow-up is reproduced with:
 
